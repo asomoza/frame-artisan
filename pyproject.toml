@@ -1,0 +1,78 @@
+[project]
+name = "FrameArtisan"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "av>=14.0.0",
+    "attrs>=25.4.0",
+    "diffusers>=0.36.0",
+    "opencv-python-headless>=4.13.0.92",
+    "peft>=0.18.1",
+    "pyqt6>=6.10.2",
+    "superqt==0.7.4",
+    "torch>=2.10.0",
+    "torchvision>=0.25.0",
+    "torchaudio>=2.10.0",
+    "transformers>=5.0.0",
+    "vcolorpicker>=1.4.0",
+    "xxhash>=3.6.0",
+    "sdnq>=0.1.0",
+    "torchcodec>=0.10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.11",
+]
+test = [
+    "pytest>=9",
+    "pytest-cov>=7",
+]
+
+[tool.ruff]
+line-length = 119
+
+[tool.ruff.lint.isort]
+lines-after-imports = 2
+
+[tool.ruff.format]
+# Like Black, use double quotes for strings.
+quote-style = "double"
+
+# Like Black, indent with spaces, rather than tabs.
+indent-style = "space"
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchaudio = [
+  { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+diffusers = { git = "https://github.com/huggingface/diffusers" }
+
+[project.gui-scripts]
+frameartisan = "frameartisan.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+markers = [
+    "gpu_light: lightweight GPU tests using a tiny model (requires GPU_LIGHT=1)",
+    "gpu_heavy: heavy GPU tests using real distilled models (requires GPU_HEAVY=1)",
+]
+
+[tool.uv]
+package = true
