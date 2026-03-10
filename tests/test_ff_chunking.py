@@ -24,7 +24,7 @@ import torch
 from frameartisan.app.app import set_app_database_path
 from frameartisan.app.model_manager import ModelManager, get_model_manager, set_global_model_manager
 from frameartisan.modules.generation.graph.nodes.ff_chunking import (
-    _chunked_feed_forward,
+    _chunked_ff_forward,
 )
 from frameartisan.utils.database import Database
 
@@ -102,19 +102,16 @@ def setup_cleanup(app_db_path):
 
 
 # ---------------------------------------------------------------------------
-# Test 1: Isolated FF layer — prove chunking is mathematically correct
+# Test 1: Isolated FF layer — prove in-place chunking is mathematically correct
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("chunk_size", [4, 16, 32])
-def test_isolated_ff_chunking_zero_diff(transformer_on_cpu, chunk_size):
+@pytest.mark.parametrize("num_chunks", [2, 4, 16])
+def test_isolated_ff_chunking_zero_diff(transformer_on_cpu, num_chunks):
     """Chunking a single FF layer on a fixed input must produce bit-identical output.
 
     Runs on CPU where matmul is deterministic regardless of input shape, so any
     diff would indicate a real bug in the chunking logic.
-
-    chunk_size=1 is excluded: it changes the matmul batch dimension to 1, which
-    alters bf16 accumulation order even on CPU.  It's also not a practical value.
     """
     block = transformer_on_cpu.transformer_blocks[0]
     ff = block.ff
@@ -123,13 +120,17 @@ def test_isolated_ff_chunking_zero_diff(transformer_on_cpu, chunk_size):
     x = torch.randn(1, 64, 4096, generator=gen, dtype=torch.bfloat16, device="cpu")
 
     with torch.inference_mode():
-        out_std = ff(x).clone()
-        out_chunked = _chunked_feed_forward(ff, x, chunk_dim=1, chunk_size=chunk_size)
+        out_std = ff(x.clone()).clone()
+
+        # Simulate the in-place chunked forward
+        ff._ff_num_chunks = num_chunks
+        x_chunked = x.clone()
+        out_chunked = _chunked_ff_forward(ff, x_chunked)
 
     diff = (out_std.float() - out_chunked.float()).abs().max().item()
-    print(f"\n  Isolated FF chunk_size={chunk_size}: max_diff={diff}")
+    print(f"\n  Isolated FF num_chunks={num_chunks}: max_diff={diff}")
 
-    assert diff == 0.0, f"Isolated FF differs with chunk_size={chunk_size}: max_diff={diff}"
+    assert diff == 0.0, f"Isolated FF differs with num_chunks={num_chunks}: max_diff={diff}"
 
 
 # ---------------------------------------------------------------------------
@@ -137,8 +138,8 @@ def test_isolated_ff_chunking_zero_diff(transformer_on_cpu, chunk_size):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("chunk_size", [4, 8, 16])
-def test_isolated_audio_ff_chunking_zero_diff(transformer_on_cpu, chunk_size):
+@pytest.mark.parametrize("num_chunks", [2, 4, 8])
+def test_isolated_audio_ff_chunking_zero_diff(transformer_on_cpu, num_chunks):
     """Same as above but for the audio FF path (audio_inner_dim=2048)."""
     block = transformer_on_cpu.transformer_blocks[0]
     audio_ff = block.audio_ff
@@ -147,10 +148,13 @@ def test_isolated_audio_ff_chunking_zero_diff(transformer_on_cpu, chunk_size):
     x = torch.randn(1, 16, 2048, generator=gen, dtype=torch.bfloat16, device="cpu")
 
     with torch.inference_mode():
-        out_std = audio_ff(x).clone()
-        out_chunked = _chunked_feed_forward(audio_ff, x, chunk_dim=1, chunk_size=chunk_size)
+        out_std = audio_ff(x.clone()).clone()
+
+        audio_ff._ff_num_chunks = num_chunks
+        x_chunked = x.clone()
+        out_chunked = _chunked_ff_forward(audio_ff, x_chunked)
 
     diff = (out_std.float() - out_chunked.float()).abs().max().item()
-    print(f"\n  Isolated audio FF chunk_size={chunk_size}: max_diff={diff}")
+    print(f"\n  Isolated audio FF num_chunks={num_chunks}: max_diff={diff}")
 
-    assert diff == 0.0, f"Isolated audio FF differs with chunk_size={chunk_size}: max_diff={diff}"
+    assert diff == 0.0, f"Isolated audio FF differs with num_chunks={num_chunks}: max_diff={diff}"

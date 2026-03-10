@@ -57,6 +57,7 @@ class GenerationSettings:
     group_offload_low_cpu_mem: bool = False
     streaming_decode: bool = False
     ff_chunking: bool = False
+    ff_num_chunks: int = 2
 
     video_codec: str = "libx264"
     video_crf: int = 23
@@ -171,6 +172,10 @@ class GenerationSettings:
                 settings.ff_chunking,
             )
 
+            settings.ff_num_chunks = int(
+                qsettings.value("ff_num_chunks", settings.ff_num_chunks)
+            )
+
             settings.source_image_enabled = coerce_bool(
                 qsettings.value("source_image_enabled", settings.source_image_enabled),
                 settings.source_image_enabled,
@@ -278,6 +283,7 @@ class GenerationSettings:
             qsettings.setValue("group_offload_low_cpu_mem", bool(self.group_offload_low_cpu_mem))
             qsettings.setValue("streaming_decode", bool(self.streaming_decode))
             qsettings.setValue("ff_chunking", bool(self.ff_chunking))
+            qsettings.setValue("ff_num_chunks", int(self.ff_num_chunks))
             qsettings.setValue("source_image_enabled", bool(self.source_image_enabled))
             qsettings.setValue("visual_conditions_enabled", bool(self.visual_conditions_enabled))
             qsettings.setValue("audio_conditioning_enabled", bool(self.audio_conditioning_enabled))

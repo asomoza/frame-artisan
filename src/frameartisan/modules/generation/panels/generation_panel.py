@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
 )
 from superqt import QLabeledDoubleSlider, QLabeledSlider
@@ -56,6 +57,7 @@ class GenerationPanel(BasePanel):
             float(getattr(self.gen_settings, "second_pass_guidance", 4.0)),
             bool(getattr(self.gen_settings, "streaming_decode", False)),
             bool(getattr(self.gen_settings, "ff_chunking", False)),
+            int(getattr(self.gen_settings, "ff_num_chunks", 2)),
             bool(getattr(self.gen_settings, "advanced_guidance", False)),
             float(getattr(self.gen_settings, "stg_scale", 0.0)),
             str(getattr(self.gen_settings, "stg_blocks", "29")),
@@ -254,10 +256,26 @@ class GenerationPanel(BasePanel):
         main_layout.addWidget(self.streaming_decode_checkbox)
 
         # Feed-forward chunking (lower peak activation VRAM during denoise)
+        ff_chunking_layout = QHBoxLayout()
         self.ff_chunking_checkbox = QCheckBox("FF Chunking")
         self.ff_chunking_checkbox.setChecked(bool(getattr(self.gen_settings, "ff_chunking", False)))
         self.ff_chunking_checkbox.toggled.connect(self.on_ff_chunking_toggled)
-        main_layout.addWidget(self.ff_chunking_checkbox)
+        ff_chunking_layout.addWidget(self.ff_chunking_checkbox)
+
+        ff_chunks_label = QLabel("Chunks:")
+        ff_chunking_layout.addWidget(ff_chunks_label)
+        self.ff_num_chunks_spinbox = QSpinBox()
+        self.ff_num_chunks_spinbox.setRange(2, 16)
+        self.ff_num_chunks_spinbox.setValue(int(getattr(self.gen_settings, "ff_num_chunks", 2)))
+        self.ff_num_chunks_spinbox.setToolTip("Number of chunks (higher = more VRAM savings, slower)")
+        self.ff_num_chunks_spinbox.valueChanged.connect(self.on_ff_num_chunks_changed)
+        ff_chunking_layout.addWidget(self.ff_num_chunks_spinbox)
+        ff_chunking_layout.addStretch()
+
+        self._ff_chunks_label = ff_chunks_label
+        self._update_ff_chunks_visibility(self.ff_chunking_checkbox.isChecked())
+
+        main_layout.addLayout(ff_chunking_layout)
 
         # --- 2nd pass (upsample) section ---
         main_layout.addSpacing(10)
@@ -410,6 +428,7 @@ class GenerationPanel(BasePanel):
         second_pass_guidance: float = 4.0,
         streaming_decode: bool = False,
         ff_chunking: bool = False,
+        ff_num_chunks: int = 2,
         advanced_guidance: bool = False,
         stg_scale: float = 0.0,
         stg_blocks: str = "29",
@@ -435,6 +454,7 @@ class GenerationPanel(BasePanel):
             QSignalBlocker(self.second_pass_guidance_slider),
             QSignalBlocker(self.streaming_decode_checkbox),
             QSignalBlocker(self.ff_chunking_checkbox),
+            QSignalBlocker(self.ff_num_chunks_spinbox),
             QSignalBlocker(self.advanced_guidance_checkbox),
             QSignalBlocker(self.stg_scale_slider),
             QSignalBlocker(self.rescale_scale_slider),
@@ -464,6 +484,8 @@ class GenerationPanel(BasePanel):
             self.second_pass_guidance_slider.setValue(float(second_pass_guidance))
             self.streaming_decode_checkbox.setChecked(bool(streaming_decode))
             self.ff_chunking_checkbox.setChecked(bool(ff_chunking))
+            self.ff_num_chunks_spinbox.setValue(int(ff_num_chunks))
+            self._update_ff_chunks_visibility(bool(ff_chunking))
             self.advanced_guidance_checkbox.setChecked(bool(advanced_guidance))
             self.stg_scale_slider.setValue(float(stg_scale))
             self.rescale_scale_slider.setValue(float(rescale_scale))
@@ -625,7 +647,15 @@ class GenerationPanel(BasePanel):
 
     def on_ff_chunking_toggled(self, checked: bool):
         self.event_bus.publish("generation_change", {"attr": "ff_chunking", "value": bool(checked)})
+        self._update_ff_chunks_visibility(checked)
         self._update_ff_stream_exclusivity()
+
+    def on_ff_num_chunks_changed(self, value: int):
+        self.event_bus.publish("generation_change", {"attr": "ff_num_chunks", "value": int(value)})
+
+    def _update_ff_chunks_visibility(self, visible: bool):
+        self._ff_chunks_label.setVisible(visible)
+        self.ff_num_chunks_spinbox.setVisible(visible)
 
     def _update_group_offload_options_visibility(self):
         strategy = self.offload_strategy_combobox.currentData()

@@ -37,6 +37,7 @@ class LTX2ModelNode(Node):
         "group_offload_low_cpu_mem",
         "streaming_decode",
         "ff_chunking",
+        "ff_num_chunks",
         "component_prefix",
         "component_overrides",
     }
@@ -52,6 +53,7 @@ class LTX2ModelNode(Node):
         group_offload_low_cpu_mem: bool = False,
         streaming_decode: bool = False,
         ff_chunking: bool = False,
+        ff_num_chunks: int = 2,
         component_prefix: str = "",
         component_overrides: dict[str, int] | None = None,
     ):
@@ -63,6 +65,7 @@ class LTX2ModelNode(Node):
         self.group_offload_low_cpu_mem = group_offload_low_cpu_mem
         self.streaming_decode = streaming_decode
         self.ff_chunking = ff_chunking
+        self.ff_num_chunks = ff_num_chunks
         self.component_prefix = component_prefix
         self.component_overrides = component_overrides
         self.status_callback = None
@@ -314,8 +317,8 @@ class LTX2ModelNode(Node):
         )
 
         if self.ff_chunking:
-            enable_forward_chunking(transformer, chunk_size=256)
-            logger.info("Feed-forward chunking enabled (chunk_size=256)")
+            enable_forward_chunking(transformer, num_chunks=self.ff_num_chunks)
+            logger.info("Feed-forward chunking enabled (num_chunks=%d)", self.ff_num_chunks)
         else:
             disable_forward_chunking(transformer)
 

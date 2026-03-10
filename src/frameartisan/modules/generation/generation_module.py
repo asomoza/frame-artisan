@@ -551,6 +551,13 @@ class GenerationModule(BaseModule):
                     model_node.ff_chunking = value
                     model_node.set_updated()
 
+        if attr == "ff_num_chunks":
+            if self.node_graph is not None:
+                model_node = self.node_graph.get_node_by_name("model")
+                if model_node is not None:
+                    model_node.ff_num_chunks = value
+                    model_node.set_updated()
+
         if attr == "second_pass_enabled":
             self._toggle_second_pass(value)
 
@@ -1550,6 +1557,7 @@ class GenerationModule(BaseModule):
                 self.gen_settings.second_pass_guidance,
                 self.gen_settings.streaming_decode,
                 self.gen_settings.ff_chunking,
+                self.gen_settings.ff_num_chunks,
             )
 
         self.gen_settings.save(self.settings)

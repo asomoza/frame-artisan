@@ -43,6 +43,7 @@ def create_default_ltx2_graph(
         group_offload_low_cpu_mem=gen_settings.group_offload_low_cpu_mem,
         streaming_decode=gen_settings.streaming_decode,
         ff_chunking=gen_settings.ff_chunking,
+        ff_num_chunks=gen_settings.ff_num_chunks,
     )
     graph.add_node(model_node, name="model")
 

@@ -1,9 +1,12 @@
 """Feed-forward chunking for LTX2VideoTransformer3DModel.
 
 Diffusers' LTX2 transformer blocks do not support chunked feed-forward out of
-the box.  This module monkey-patches the block's ``forward`` method so that the
-video and audio FF layers can be processed in chunks along the sequence
-dimension, trading a small amount of speed for significantly lower peak VRAM.
+the box.  This module monkey-patches each FF module's ``forward`` so that the
+inner ``net`` (Sequential of GELU → Dropout → Linear) is called in chunks along
+the sequence dimension, trading a small amount of speed for lower peak VRAM.
+
+The key is **in-place** write-back: each chunk's result is written directly into
+the input tensor, avoiding any extra output allocation.
 
 Usage::
 
@@ -12,76 +15,45 @@ Usage::
         disable_forward_chunking,
     )
 
-    enable_forward_chunking(transformer, chunk_size=256)
+    enable_forward_chunking(transformer, num_chunks=2)
     # ... run inference ...
     disable_forward_chunking(transformer)
 """
 
 from __future__ import annotations
 
-import torch
 import torch.nn as nn
 
 
-def _chunked_feed_forward(
-    ff: nn.Module,
-    hidden_states: torch.Tensor,
-    chunk_dim: int,
-    chunk_size: int,
-) -> torch.Tensor:
-    """Apply *ff* in chunks of *chunk_size* along *chunk_dim*."""
-    num_chunks = hidden_states.shape[chunk_dim] // chunk_size
-    if num_chunks <= 1:
-        return ff(hidden_states)
-    ff_output = torch.cat(
-        [ff(hid_slice) for hid_slice in hidden_states.chunk(num_chunks, dim=chunk_dim)],
-        dim=chunk_dim,
-    )
-    return ff_output
+def _apply_net(net: nn.ModuleList, x):
+    """Run all layers in a FeedForward's ``net`` ModuleList sequentially."""
+    for module in net:
+        x = module(x)
+    return x
 
 
-def _make_patched_forward(original_forward, block):
-    """Create a replacement ``forward`` that conditionally chunks the FF calls."""
+def _chunked_ff_forward(self: nn.Module, x):
+    """Replacement ``FeedForward.forward`` that processes ``self.net`` in chunks.
 
-    def patched_forward(*args, **kwargs):
-        chunk_size = getattr(block, "_ff_chunk_size", None)
-        if chunk_size is None:
-            return original_forward(*args, **kwargs)
+    Writes results back into *x* in-place so no extra output tensor is needed.
+    """
+    num_chunks: int = getattr(self, "_ff_num_chunks", 1)
+    seq_len = x.shape[1]
 
-        chunk_dim = getattr(block, "_ff_chunk_dim", 1)
+    if num_chunks <= 1 or seq_len <= 1:
+        return _apply_net(self.net, x)
 
-        # Run the original forward but intercept the FF calls.
-        # We temporarily replace self.ff and self.audio_ff with chunked wrappers.
-        orig_ff = block.ff
-        orig_audio_ff = block.audio_ff
-
-        class _ChunkedFF(nn.Module):
-            def __init__(self, ff_module, c_dim, c_size):
-                super().__init__()
-                self._ff = ff_module
-                self._c_dim = c_dim
-                self._c_size = c_size
-
-            def forward(self, x):
-                return _chunked_feed_forward(self._ff, x, self._c_dim, self._c_size)
-
-        block.ff = _ChunkedFF(orig_ff, chunk_dim, chunk_size)
-        block.audio_ff = _ChunkedFF(orig_audio_ff, chunk_dim, chunk_size)
-        try:
-            result = original_forward(*args, **kwargs)
-        finally:
-            block.ff = orig_ff
-            block.audio_ff = orig_audio_ff
-
-        return result
-
-    return patched_forward
+    chunk_size = seq_len // num_chunks
+    for i in range(num_chunks):
+        start = i * chunk_size
+        end = start + chunk_size if i < num_chunks - 1 else seq_len
+        x[:, start:end] = _apply_net(self.net, x[:, start:end])
+    return x
 
 
 def enable_forward_chunking(
     transformer,
-    chunk_size: int | None = None,
-    dim: int = 1,
+    num_chunks: int = 2,
 ) -> None:
     """Enable chunked feed-forward on all ``LTX2VideoTransformerBlock`` instances.
 
@@ -89,31 +61,33 @@ def enable_forward_chunking(
         transformer: An ``LTX2VideoTransformer3DModel`` (or any model with
             ``transformer_blocks`` containing blocks that have ``.ff`` and
             ``.audio_ff`` attributes).
-        chunk_size: Number of tokens per chunk along *dim*.  ``None`` or ``0``
-            disables chunking (same as calling :func:`disable_forward_chunking`).
-        dim: The dimension to chunk along (default ``1`` = sequence dim for
-            shape ``[B, seq_len, hidden_dim]``).
+        num_chunks: Number of chunks to split the sequence into (default 2).
+            ``1`` or less disables chunking.
     """
-    chunk_size = chunk_size or 0
     blocks = getattr(transformer, "transformer_blocks", [])
     for block in blocks:
-        if not hasattr(block, "ff") or not hasattr(block, "audio_ff"):
-            continue
+        for ff_attr in ("ff", "audio_ff"):
+            ff = getattr(block, ff_attr, None)
+            if ff is None:
+                continue
 
-        block._ff_chunk_size = chunk_size if chunk_size > 0 else None
-        block._ff_chunk_dim = dim
+            ff._ff_num_chunks = num_chunks
 
-        # Only patch once — store the original forward so we can restore it.
-        if not hasattr(block, "_original_forward"):
-            block._original_forward = block.forward
-            block.forward = _make_patched_forward(block._original_forward, block)
+            if not hasattr(ff, "_original_forward"):
+                ff._original_forward = ff.forward
+                ff.forward = _chunked_ff_forward.__get__(ff, type(ff))
 
 
 def disable_forward_chunking(transformer) -> None:
     """Remove chunked feed-forward from all transformer blocks."""
     blocks = getattr(transformer, "transformer_blocks", [])
     for block in blocks:
-        block._ff_chunk_size = None
-        if hasattr(block, "_original_forward"):
-            block.forward = block._original_forward
-            del block._original_forward
+        for ff_attr in ("ff", "audio_ff"):
+            ff = getattr(block, ff_attr, None)
+            if ff is None:
+                continue
+
+            ff._ff_num_chunks = 1
+            if hasattr(ff, "_original_forward"):
+                ff.forward = ff._original_forward
+                del ff._original_forward
