@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QSignalBlocker, Qt
@@ -20,12 +21,25 @@ from superqt import QLabeledDoubleSlider, QLabeledSlider
 
 from frameartisan.modules.generation.constants import (
     ADVANCED_GUIDANCE_DEFAULTS,
+    LTX2_LATENT_UPSAMPLER_DIR,
     MODEL_TYPE_DEFAULTS,
     OFFLOAD_STRATEGIES,
 )
 from frameartisan.modules.generation.panels.base_panel import BasePanel
 from frameartisan.modules.generation.widgets.video_dimensions_widget import VideoDimensionsWidget
 from frameartisan.utils.json_utils import cast_model
+
+
+def _triton_available() -> bool:
+    try:
+        import triton  # noqa: F401
+
+        return True
+    except ModuleNotFoundError:
+        return False
+
+
+_HAS_TRITON = _triton_available()
 
 
 if TYPE_CHECKING:
@@ -205,6 +219,7 @@ class GenerationPanel(BasePanel):
         self.use_torch_compile_checkbox = QCheckBox("Use torch.compile")
         self.use_torch_compile_checkbox.setChecked(bool(getattr(self.gen_settings, "use_torch_compile", False)))
         self.use_torch_compile_checkbox.toggled.connect(self.on_use_torch_compile_toggled)
+        self.use_torch_compile_checkbox.setVisible(_HAS_TRITON)
         main_layout.addWidget(self.use_torch_compile_checkbox)
 
         self.max_autotune_checkbox = QCheckBox("Max Autotune")
@@ -347,12 +362,14 @@ class GenerationPanel(BasePanel):
         # Compile cache size + clear button
         self.compile_cache_label = QLabel("Compile cache: –")
         self.compile_cache_label.setStyleSheet("color: #9aa0a6;")
+        self.compile_cache_label.setVisible(_HAS_TRITON)
         main_layout.addWidget(self.compile_cache_label)
 
-        clear_compile_cache_button = QPushButton("Clear Compile Cache")
-        clear_compile_cache_button.setObjectName("red_button")
-        clear_compile_cache_button.clicked.connect(self.on_clear_compile_cache_clicked)
-        main_layout.addWidget(clear_compile_cache_button)
+        self.clear_compile_cache_button = QPushButton("Clear Compile Cache")
+        self.clear_compile_cache_button.setObjectName("red_button")
+        self.clear_compile_cache_button.clicked.connect(self.on_clear_compile_cache_clicked)
+        self.clear_compile_cache_button.setVisible(_HAS_TRITON)
+        main_layout.addWidget(self.clear_compile_cache_button)
 
         self.setLayout(main_layout)
 
@@ -508,6 +525,17 @@ class GenerationPanel(BasePanel):
         self._update_advanced_guidance_visibility()
 
     def on_second_pass_toggled(self, checked: bool):
+        if checked and not self._has_upsampler_model():
+            blocker = QSignalBlocker(self.second_pass_checkbox)
+            try:
+                self.second_pass_checkbox.setChecked(False)
+            finally:
+                del blocker
+            self.event_bus.publish(
+                "show_snackbar",
+                {"action": "show", "message": "Latent upsampler model not found. Download it first."},
+            )
+            return
         self.event_bus.publish("generation_change", {"attr": "second_pass_enabled", "value": bool(checked)})
         self._update_second_pass_visibility()
 
@@ -522,6 +550,9 @@ class GenerationPanel(BasePanel):
             "manage_dialog",
             {"dialog_type": "model_manager", "action": "open", "target": "second_pass_model"},
         )
+
+    def _has_upsampler_model(self) -> bool:
+        return os.path.isdir(os.path.join(str(self.directories.models_diffusers), LTX2_LATENT_UPSAMPLER_DIR))
 
     def _update_second_pass_visibility(self):
         visible = self.second_pass_checkbox.isChecked()

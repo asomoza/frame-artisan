@@ -12,102 +12,74 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def build_variant_tags(
-    transformer_tag: str,
-    text_encoder_tag: str,
-    quant_method: str = "",
-) -> str:
-    """Compose comma-separated tags from component-level metadata."""
-    parts: list[str] = []
-    if quant_method:
-        parts.append(quant_method)
-    parts.append(transformer_tag)
-    parts.append(text_encoder_tag)
-    return ", ".join(parts)
-
-
 VARIANT_CONFIG = {
     "normal": {
         "repo_id": "OzzyGT/LTX2",
-        "display_name": "LTX2 (bf16)",
+        "display_name": "LTX-2",
         "model_type": 1,
         "allow_patterns": None,  # download everything
         "dir_name": "LTX2",
         "quant_method": "",
-        "transformer_tag": "bf16 transformer",
-        "text_encoder_tag": "bf16 text encoder",
-        "tags": build_variant_tags("bf16 transformer", "bf16 text encoder"),
+        "tags": "base",
         "version": "1.0",
     },
     "distilled": {
         "repo_id": "OzzyGT/LTX2_distilled",
-        "display_name": "LTX2 Distilled (bf16)",
+        "display_name": "LTX-2 Distilled",
         "model_type": 2,
         "allow_patterns": ["transformer/**", "scheduler/**", "model_index.json"],
         "dir_name": "LTX2_Distilled",
         "quant_method": "",
-        "transformer_tag": "bf16 transformer",
-        "text_encoder_tag": "bf16 text encoder",
-        "tags": build_variant_tags("bf16 transformer", "bf16 text encoder"),
+        "tags": "distilled",
         "version": "1.0",
     },
     "sdnq_4bit": {
         "repo_id": "OzzyGT/LTX2_SDNQ_4bit_dynamic",
-        "display_name": "LTX2 SDNQ 4-bit",
+        "display_name": "LTX-2 SDNQ 4-bit",
         "model_type": 1,
         "allow_patterns": ["transformer/**", "text_encoder/**", "model_index.json"],
         "dir_name": "LTX2_SDNQ_4bit",
         "quant_method": "sdnq",
-        "transformer_tag": "4bit transformer",
-        "text_encoder_tag": "4bit text encoder",
-        "tags": build_variant_tags("4bit transformer", "4bit text encoder", "sdnq"),
+        "tags": "base",
         "version": "4bit",
     },
     "sdnq_8bit": {
         "repo_id": "OzzyGT/LTX2_SDNQ_8bit_dynamic",
-        "display_name": "LTX2 SDNQ 8-bit",
+        "display_name": "LTX-2 SDNQ 8-bit",
         "model_type": 1,
         "allow_patterns": ["transformer/**", "text_encoder/**", "model_index.json"],
         "dir_name": "LTX2_SDNQ_8bit",
         "quant_method": "sdnq",
-        "transformer_tag": "8bit transformer",
-        "text_encoder_tag": "8bit text encoder",
-        "tags": build_variant_tags("8bit transformer", "8bit text encoder", "sdnq"),
+        "tags": "base",
         "version": "8bit",
     },
     "distilled_sdnq_4bit": {
         "repo_id": "OzzyGT/LTX2_distilled_SDNQ_4bit_dynamic",
-        "display_name": "LTX2 Distilled SDNQ 4-bit",
+        "display_name": "LTX-2 Distilled SDNQ 4-bit",
         "model_type": 2,
         "allow_patterns": ["transformer/**", "text_encoder/**", "scheduler/**", "model_index.json"],
         "dir_name": "LTX2_Distilled_SDNQ_4bit",
         "quant_method": "sdnq",
-        "transformer_tag": "4bit transformer",
-        "text_encoder_tag": "4bit text encoder",
-        "tags": build_variant_tags("4bit transformer", "4bit text encoder", "sdnq"),
+        "tags": "distilled",
         "version": "4bit",
     },
     "distilled_sdnq_8bit": {
         "repo_id": "OzzyGT/LTX2_distilled_SDNQ_8bit_dynamic",
-        "display_name": "LTX2 Distilled SDNQ 8-bit",
+        "display_name": "LTX-2 Distilled SDNQ 8-bit",
         "model_type": 2,
         "allow_patterns": ["transformer/**", "text_encoder/**", "scheduler/**", "model_index.json"],
         "dir_name": "LTX2_Distilled_SDNQ_8bit",
         "quant_method": "sdnq",
-        "transformer_tag": "8bit transformer",
-        "text_encoder_tag": "8bit text encoder",
-        "tags": build_variant_tags("8bit transformer", "8bit text encoder", "sdnq"),
+        "tags": "distilled",
         "version": "8bit",
     },
     "latent_upsampler": {
         "repo_id": "OzzyGT/LTX2_latent_upsampler",
-        "display_name": "LTX2 Latent Upsampler",
+        "display_name": "LTX-2 Latent Upsampler",
         "model_type": 0,
         "allow_patterns": None,
         "dir_name": "LTX2_latent_upsampler",
         "quant_method": "",
-        "transformer_tag": "",
-        "text_encoder_tag": "",
         "tags": "",
         "version": "1.0",
     },
