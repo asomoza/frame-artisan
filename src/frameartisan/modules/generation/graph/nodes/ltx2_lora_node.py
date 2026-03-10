@@ -289,6 +289,9 @@ class LTX2LoraNode(Node):
                     self.__class__.__name__,
                 ) from e
 
+        # Re-apply group offload hooks so new LoRA submodules are covered
+        mm.reapply_group_offload(transformer_component_name, self.device)
+
         # Extract max reference_downscale_factor from active LoRA metadata
         max_downscale = 1
         for adapter_name, cfg in desired.items():

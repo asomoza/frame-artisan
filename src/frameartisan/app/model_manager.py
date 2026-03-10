@@ -179,6 +179,36 @@ class ModelManager:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+    def reapply_group_offload(self, component_name: str, device: torch.device | str) -> None:
+        """Re-apply group offload hooks to a single component.
+
+        Call this after modifying a component's module structure (e.g. loading
+        LoRA adapters) so that new submodules get offload hooks.
+        """
+        if self._applied_strategy != "group_offload":
+            return
+
+        from diffusers.hooks.group_offloading import apply_group_offloading
+
+        with self._lock:
+            mod = self._managed_components.get(component_name)
+        if mod is None:
+            return
+
+        use_stream = self._group_offload_use_stream
+        offload_kwargs = dict(
+            onload_device=torch.device(device) if isinstance(device, str) else device,
+            offload_device=torch.device("cpu"),
+            offload_type="leaf_level",
+            use_stream=use_stream,
+        )
+        if use_stream and self._group_offload_low_cpu_mem:
+            offload_kwargs["low_cpu_mem_usage"] = True
+
+        self.remove_offload_hooks(mod)
+        apply_group_offloading(mod, **offload_kwargs)
+        logger.info("Re-applied group offload hooks for %s", component_name)
+
     def apply_offload_strategy(self, device: torch.device | str) -> str:
         """Resolve and apply the current offload strategy to all managed components.
 
