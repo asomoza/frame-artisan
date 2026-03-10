@@ -18,11 +18,7 @@ if sys.platform == "win32":
         for _dll in sorted(glob.glob(os.path.join(_torch_lib, "*.dll"))):
             _kernel32.LoadLibraryW(_dll)
 
-from frameartisan.app.frameartisan_application import FrameArtisanApplication
 from frameartisan.app.logging_conf import logging_config
-
-
-logging.getLogger("PIL").setLevel(logging.ERROR)
 
 
 def my_exception_hook(exctype, value, traceback):
@@ -34,17 +30,34 @@ sys.excepthook = my_exception_hook
 
 
 def main():
-    from frameartisan.app.model_manager import ModelManager, set_global_model_manager
+    import argparse
 
-    set_global_model_manager(ModelManager())
-    app = FrameArtisanApplication(sys.argv)
-    sys.exit(app.exec())
+    parser = argparse.ArgumentParser(description="Frame Artisan")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging to console")
+    args, remaining = parser.parse_known_args()
 
+    if not args.debug:
+        logging_config["handlers"]["consoleHandler"]["level"] = "ERROR"
+        logging_config["loggers"][""]["level"] = "ERROR"
 
-if __name__ == "__main__":
     os.makedirs(
         os.path.dirname(logging_config["handlers"]["fileHandler"]["filename"]),
         exist_ok=True,
     )
     logging.config.dictConfig(logging_config)
+    logging.getLogger("PIL").setLevel(logging.ERROR)
+
+    logger = logging.getLogger(__name__)
+    logger.debug("Starting Frame Artisan")
+
+    from frameartisan.app.frameartisan_application import FrameArtisanApplication
+    from frameartisan.app.model_manager import ModelManager, set_global_model_manager
+
+    set_global_model_manager(ModelManager())
+    sys.argv = [sys.argv[0]] + remaining
+    app = FrameArtisanApplication(sys.argv)
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
     main()

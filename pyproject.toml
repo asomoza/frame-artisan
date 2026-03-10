@@ -61,7 +61,7 @@ torchaudio = [
 ]
 diffusers = { git = "https://github.com/huggingface/diffusers" }
 
-[project.gui-scripts]
+[project.scripts]
 frameartisan = "frameartisan.__main__:main"
 
 [build-system]

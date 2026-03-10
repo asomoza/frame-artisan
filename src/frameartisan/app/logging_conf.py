@@ -13,7 +13,7 @@ logging_config = {
             "class": "logging.StreamHandler",
             "level": "DEBUG",
             "formatter": "console_formatter",
-            "stream": "ext://sys.stdout",
+            "stream": "ext://sys.stderr",
         },
         "fileHandler": {
             "class": "logging.FileHandler",
