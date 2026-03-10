@@ -161,6 +161,9 @@ class ModelDownloadDialog(QDialog):
     # Variants that are standalone and don't require the "normal" base model.
     _STANDALONE_VARIANTS = {"latent_upsampler"}
 
+    # Distilled quantized variants that require the "distilled" base model.
+    _DISTILLED_QUANT_VARIANTS = {"distilled_sdnq_4bit", "distilled_sdnq_8bit"}
+
     def _on_checkbox_changed(self):
         any_non_normal = any(
             cb.isChecked()
@@ -177,6 +180,20 @@ class ModelDownloadDialog(QDialog):
                 normal_cb.blockSignals(False)
             else:
                 normal_cb.setEnabled(True)
+
+        # Force "distilled" when any distilled quantized variant is selected.
+        any_distilled_quant = any(
+            self._checkboxes[key].isChecked() for key in self._DISTILLED_QUANT_VARIANTS
+        )
+        distilled_cb = self._checkboxes["distilled"]
+        if "distilled" not in self._already_downloaded:
+            if any_distilled_quant:
+                distilled_cb.blockSignals(True)
+                distilled_cb.setChecked(True)
+                distilled_cb.setEnabled(False)
+                distilled_cb.blockSignals(False)
+            else:
+                distilled_cb.setEnabled(True)
 
         # Enable download only if there are new (not already downloaded) variants checked
         any_new_checked = any(

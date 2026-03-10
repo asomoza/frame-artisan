@@ -148,12 +148,13 @@ class ModelDownloadThread(QThread):
             # Track which text-encoder quantizations have been downloaded
             downloaded_te: set[str] = set()
 
-            # Always download normal first (it provides shared components)
+            # Download base models first: normal (shared components), then distilled.
             ordered = []
-            if "normal" in self.selected_variants:
-                ordered.append("normal")
+            for base in ("normal", "distilled"):
+                if base in self.selected_variants:
+                    ordered.append(base)
             for v in self.selected_variants:
-                if v != "normal":
+                if v not in ("normal", "distilled"):
                     ordered.append(v)
 
             for variant_key in ordered:
