@@ -126,7 +126,7 @@ class LTX2ModelNode(Node):
         from frameartisan.app.model_manager import get_model_manager
 
         try:
-            from transformers import GemmaTokenizer, Gemma3ForConditionalGeneration
+            from transformers import Gemma3ForConditionalGeneration, GemmaTokenizer
         except ImportError:
             raise NodeError(
                 "transformers package not found. Install transformers>=4.50 for LTX2 support.",
@@ -147,14 +147,17 @@ class LTX2ModelNode(Node):
 
         # Build resolved path map to detect what changed since last run.
         all_comp_types = [
-            "text_encoder", "transformer", "tokenizer", "scheduler",
-            "vae", "audio_vae", "connectors", "vocoder",
+            "text_encoder",
+            "transformer",
+            "tokenizer",
+            "scheduler",
+            "vae",
+            "audio_vae",
+            "connectors",
+            "vocoder",
         ]
         resolved_paths = {ct: _path(ct) for ct in all_comp_types}
-        changed = {
-            ct for ct in all_comp_types
-            if resolved_paths[ct] != self._prev_component_paths.get(ct)
-        }
+        changed = {ct for ct in all_comp_types if resolved_paths[ct] != self._prev_component_paths.get(ct)}
         if changed:
             logger.info("Components to reload: %s", ", ".join(sorted(changed)))
         else:
@@ -171,11 +174,25 @@ class LTX2ModelNode(Node):
 
         # Register SDNQ quantization type before loading any components
         sdnq_available = False
+        _sdnqconfig_patched = False
         if quant_type == "sdnq":
             try:
                 from sdnq import SDNQConfig  # noqa: F401 — registers sdnq in diffusers/transformers
+                from sdnq.common import check_torch_compile
 
                 sdnq_available = True
+
+                if not check_torch_compile():
+                    # The saved config may store use_quantized_matmul which
+                    # will error on load if triton is not present
+                    _orig_sdnqconfig_init = SDNQConfig.__init__
+
+                    def _patched_init(self, *args, use_quantized_matmul=False, **kwargs):  # noqa: ARG001
+                        _orig_sdnqconfig_init(self, *args, use_quantized_matmul=False, **kwargs)
+
+                    SDNQConfig.__init__ = _patched_init
+                    _sdnqconfig_patched = True
+                    logger.info("Triton / torch.compile unavailable — SDNQ quantized matmul disabled for loading")
             except ImportError:
                 logger.warning("sdnq package not available — SDNQ models will load dequantized (higher memory usage)")
 
@@ -187,7 +204,7 @@ class LTX2ModelNode(Node):
 
         # Always pass torch_dtype=bfloat16. For SDNQ models this casts
         # non-quantized layers (norms, biases) to bf16 while preserving
-        # quantized weights — matching the pipeline's behavior.
+        # quantized weights
         heavy_kwargs: dict = {"device_map": "cpu", "torch_dtype": torch.bfloat16}
 
         if text_encoder is None:
@@ -237,17 +254,24 @@ class LTX2ModelNode(Node):
         connectors = _load_or_reuse("connectors", LTX2TextConnectors, **light_kwargs)
         vocoder = _load_or_reuse("vocoder", LTX2Vocoder, **light_kwargs)
 
+        # Restore original SDNQConfig.__init__ if we patched it
+        if _sdnqconfig_patched:
+            SDNQConfig.__init__ = _orig_sdnqconfig_init  # noqa: F821
+
         # SDNQ post-processing: enable quantized matmul when triton is available
         if quant_type == "sdnq" and sdnq_available:
             try:
-                import triton  # noqa: F401
+                from sdnq.common import check_torch_compile as _ctc
 
-                from sdnq.loader import apply_sdnq_options_to_model
+                if _ctc():
+                    from sdnq.loader import apply_sdnq_options_to_model
 
-                transformer = apply_sdnq_options_to_model(transformer, use_quantized_matmul=True)
-                text_encoder = apply_sdnq_options_to_model(text_encoder, use_quantized_matmul=True)
-                logger.info("SDNQ quantized matmul enabled for transformer and text_encoder")
-            except ImportError:
+                    transformer = apply_sdnq_options_to_model(transformer, use_quantized_matmul=True)
+                    text_encoder = apply_sdnq_options_to_model(text_encoder, use_quantized_matmul=True)
+                    logger.info("SDNQ quantized matmul enabled for transformer and text_encoder")
+                else:
+                    logger.info("Triton / torch.compile not available — SDNQ models using standard matmul")
+            except Exception:
                 logger.info("triton not available — SDNQ models will use standard matmul")
 
         # Register all nn.Module components for lifecycle management.
