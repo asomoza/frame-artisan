@@ -38,7 +38,7 @@ class SourceImageDialog(BaseDialog):
         super().__init__(dialog_type, directories, preferences)
 
         self.setWindowTitle("Source Image")
-        self.setMinimumSize(900, 900)
+        self.setMinimumSize(900, self.MAX_MIN_HEIGHT)
 
         self.dialog_busy = False
         self.active_editor = None

@@ -21,6 +21,7 @@ class CustomSizeGrip(QSizeGrip):
 
 class BaseDialog(QDialog):
     border_color = QColor("#ff6b6b6b")
+    MAX_MIN_HEIGHT = 700
 
     def __init__(self, dialog_type: str, directories: DirectoriesObject, preferences: PreferencesObject, parent=None):
         super().__init__(parent)

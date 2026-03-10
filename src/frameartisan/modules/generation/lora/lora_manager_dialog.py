@@ -38,7 +38,7 @@ class LoraManagerDialog(BaseDialog):
             super().__init__(*args[:3], *args[5:])
 
         self.setWindowTitle("LoRA Manager")
-        self.setMinimumSize(1160, 950)
+        self.setMinimumSize(1160, self.MAX_MIN_HEIGHT)
 
         self.loading_models = False
         self.selected_model = None

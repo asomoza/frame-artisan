@@ -34,7 +34,7 @@ class ModelManagerDialog(BaseDialog):
             super().__init__(*args[:3], *args[4:])
 
         self.setWindowTitle("Model Manager")
-        self.setMinimumSize(1160, 950)
+        self.setMinimumSize(1160, self.MAX_MIN_HEIGHT)
 
         self.loading_models = False
         self.selected_model = None
