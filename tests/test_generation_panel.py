@@ -17,15 +17,18 @@ def qapp():
 
 
 @pytest.fixture()
-def panel(qapp):
+def panel(qapp, tmp_path):
     settings = GenerationSettings()
+
+    # Create expected model directories so guards pass
+    (tmp_path / "LTX2_latent_upsampler").mkdir()
 
     # Fake preferences and directories (panel only reads from them at construction)
     class FakePrefs:
         pass
 
     class FakeDirs:
-        pass
+        models_diffusers = str(tmp_path)
 
     return GenerationPanel(settings, FakePrefs(), FakeDirs())
 
