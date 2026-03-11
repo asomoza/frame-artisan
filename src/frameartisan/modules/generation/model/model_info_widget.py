@@ -215,7 +215,7 @@ class ModelInfoWidget(QWidget):
 
         self.event_bus.publish(
             "generation_change",
-            {"attr": "component_variant_changed", "value": comp_type},
+            {"attr": "component_variant_changed", "value": comp_type, "target": self.model_target},
         )
 
     def on_delete_clicked(self):

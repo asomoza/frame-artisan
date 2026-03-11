@@ -111,21 +111,21 @@ class LTX2SecondPassLatentsNode(Node):
         packed_clean_for_output = None
         if clean_latents_packed is not None and has_conditioning:
             # Unpack → spatial upsample 2x → repack
+            # The upsampler only doubles spatial dims, not temporal — unpack
+            # clean_latents at the original (pre-upsample) dimensions.
             clean_5d = unpack_latents(
                 clean_latents_packed,
-                latent_num_frames // 2 if latent_num_frames > 1 else latent_num_frames,
+                latent_num_frames,
                 latent_height // 2,
                 latent_width // 2,
                 patch_size=1,
                 patch_size_t=1,
             )
-            # Upsample spatial dims 2x
+            # Upsample spatial dims 2x (keep temporal unchanged)
             b, c, f, h, w = clean_5d.shape
-            clean_flat = clean_5d.reshape(b * c, f, h, w)
-            clean_flat = torch.nn.functional.interpolate(
-                clean_flat, size=(f, h * 2, w * 2), mode="trilinear", align_corners=False
+            clean_5d = torch.nn.functional.interpolate(
+                clean_5d, size=(f, h * 2, w * 2), mode="trilinear", align_corners=False
             )
-            clean_5d = clean_flat.reshape(b, c, f, h * 2, w * 2)
             packed_clean_for_output = pack_latents(clean_5d, patch_size=1, patch_size_t=1)
 
         if model_type == 2:
@@ -140,7 +140,7 @@ class LTX2SecondPassLatentsNode(Node):
                 cond_mask_packed = conditioning_mask.unsqueeze(-1)  # [B, seq, 1]
                 cond_mask_5d_raw = unpack_latents(
                     cond_mask_packed,
-                    latent_num_frames // 2 if latent_num_frames > 1 else latent_num_frames,
+                    latent_num_frames,
                     latent_height // 2,
                     latent_width // 2,
                     patch_size=1,
@@ -148,11 +148,9 @@ class LTX2SecondPassLatentsNode(Node):
                 )
                 # Upsample mask to new 2x spatial dims
                 bm, cm, fm, hm, wm = cond_mask_5d_raw.shape
-                cond_mask_flat = cond_mask_5d_raw.reshape(bm * cm, fm, hm, wm)
-                cond_mask_flat = torch.nn.functional.interpolate(
-                    cond_mask_flat, size=(fm, hm * 2, wm * 2), mode="nearest"
+                cond_mask_5d = torch.nn.functional.interpolate(
+                    cond_mask_5d_raw, size=(fm, hm * 2, wm * 2), mode="nearest"
                 )
-                cond_mask_5d = cond_mask_flat.reshape(bm, cm, fm, hm * 2, wm * 2)
 
                 video_5d = unpack_latents(
                     video_latents,
@@ -200,18 +198,16 @@ class LTX2SecondPassLatentsNode(Node):
                 cond_mask_packed_src = conditioning_mask.unsqueeze(-1)
                 cond_mask_5d_src = unpack_latents(
                     cond_mask_packed_src,
-                    latent_num_frames // 2 if latent_num_frames > 1 else latent_num_frames,
+                    latent_num_frames,
                     latent_height // 2,
                     latent_width // 2,
                     patch_size=1,
                     patch_size_t=1,
                 )
                 bm2, cm2, fm2, hm2, wm2 = cond_mask_5d_src.shape
-                cond_mask_flat2 = cond_mask_5d_src.reshape(bm2 * cm2, fm2, hm2, wm2)
-                cond_mask_flat2 = torch.nn.functional.interpolate(
-                    cond_mask_flat2, size=(fm2, hm2 * 2, wm2 * 2), mode="nearest"
+                cond_mask_5d_new = torch.nn.functional.interpolate(
+                    cond_mask_5d_src, size=(fm2, hm2 * 2, wm2 * 2), mode="nearest"
                 )
-                cond_mask_5d_new = cond_mask_flat2.reshape(bm2, cm2, fm2, hm2 * 2, wm2 * 2)
                 conditioning_mask = pack_latents(cond_mask_5d_new, patch_size=1, patch_size_t=1).squeeze(-1)
             else:
                 # Legacy path: simple frame-0 mask

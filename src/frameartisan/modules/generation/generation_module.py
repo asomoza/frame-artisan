@@ -493,12 +493,14 @@ class GenerationModule(BaseModule):
 
         if attr == "component_variant_changed":
             if self.node_graph is not None:
-                model_node = self.node_graph.get_node_by_name("model")
-                if model_node is not None:
-                    model_node.component_overrides = self._read_component_overrides(
-                        model_node.model_id
+                target = data.get("target", "model")
+                node_name = "second_pass_model" if target == "second_pass_model" else "model"
+                node = self.node_graph.get_node_by_name(node_name)
+                if node is not None:
+                    node.component_overrides = self._read_component_overrides(
+                        node.model_id
                     )
-                    model_node.set_updated()
+                    node.set_updated()
             return
 
         if attr == "use_torch_compile":
@@ -664,6 +666,9 @@ class GenerationModule(BaseModule):
                 sp_model_node = self.node_graph.get_node_by_name("second_pass_model")
                 if sp_model_node is not None:
                     sp_model_node.update_value(model_data_object.filepath, model_data_object.id)
+                    sp_model_node.component_overrides = self._read_component_overrides(
+                        model_data_object.id
+                    )
 
                 sp_model_type_node = self.node_graph.get_node_by_name("second_pass_model_type")
                 if sp_model_type_node is not None:

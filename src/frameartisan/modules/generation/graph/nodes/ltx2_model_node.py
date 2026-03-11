@@ -75,8 +75,11 @@ class LTX2ModelNode(Node):
     def _resolve_component_paths(self, model_path: str) -> dict[str, str]:
         """Resolve actual storage paths for components via the registry.
 
-        Uses resolve_model_components to apply DB overrides.
-        Falls back to local subfolders when the registry is unavailable.
+        Uses the node's in-memory ``component_overrides`` when available so
+        that first-pass and second-pass model nodes can have independent
+        variant selections even when they share the same model_id.  Falls
+        back to DB overrides when ``component_overrides`` is ``None``, and
+        to local subfolders when the registry is unavailable.
         """
         try:
             from frameartisan.app.app import get_app_database_path
@@ -89,7 +92,12 @@ class LTX2ModelNode(Node):
                 components_base_dir = os.path.join(os.path.dirname(model_path), "_components")
                 registry = ComponentRegistry(db_path, components_base_dir)
                 if self.model_id is not None:
-                    comps = registry.resolve_model_components(self.model_id)
+                    if self.component_overrides:
+                        comps = registry.resolve_model_components_with_overrides(
+                            self.model_id, self.component_overrides
+                        )
+                    else:
+                        comps = registry.resolve_model_components(self.model_id)
                     if comps:
                         return {ct: info.storage_path for ct, info in comps.items()}
                 paths = registry.resolve_component_paths(model_path)
@@ -145,17 +153,24 @@ class LTX2ModelNode(Node):
         def _path(comp_type: str) -> str:
             return component_paths.get(comp_type, os.path.join(model_path, comp_type))
 
+        prefix = self.component_prefix
+        transformer_only = bool(prefix)
+
         # Build resolved path map to detect what changed since last run.
-        all_comp_types = [
-            "text_encoder",
-            "transformer",
-            "tokenizer",
-            "scheduler",
-            "vae",
-            "audio_vae",
-            "connectors",
-            "vocoder",
-        ]
+        # When prefix is set (2nd pass), only load the transformer and scheduler.
+        if transformer_only:
+            all_comp_types = ["transformer", "scheduler"]
+        else:
+            all_comp_types = [
+                "text_encoder",
+                "transformer",
+                "tokenizer",
+                "scheduler",
+                "vae",
+                "audio_vae",
+                "connectors",
+                "vocoder",
+            ]
         resolved_paths = {ct: _path(ct) for ct in all_comp_types}
         changed = {ct for ct in all_comp_types if resolved_paths[ct] != self._prev_component_paths.get(ct)}
         if changed:
@@ -165,11 +180,13 @@ class LTX2ModelNode(Node):
             changed = set(all_comp_types)
 
         # --- Heavy components (cached in ModelManager) ---
-        te_path = resolved_paths["text_encoder"]
         tr_path = resolved_paths["transformer"]
+        te_path = resolved_paths.get("text_encoder", "")
 
         # Detect quantization from the actual resolved paths (not the base model dir)
-        quant_type = self._detect_quantization_from_path(tr_path) or self._detect_quantization_from_path(te_path)
+        quant_type = self._detect_quantization_from_path(tr_path)
+        if not transformer_only:
+            quant_type = quant_type or self._detect_quantization_from_path(te_path)
         logger.info("LTX2 quantization type detected: %s", quant_type or "full-precision")
 
         # Register SDNQ quantization type before loading any components
@@ -196,10 +213,7 @@ class LTX2ModelNode(Node):
             except ImportError:
                 logger.warning("sdnq package not available — SDNQ models will load dequantized (higher memory usage)")
 
-        te_hash = mm.component_hash(te_path)
         tr_hash = mm.component_hash(tr_path)
-
-        text_encoder = mm.get_cached(te_hash)
         transformer = mm.get_cached(tr_hash)
 
         # Always pass torch_dtype=bfloat16. For SDNQ models this casts
@@ -207,20 +221,23 @@ class LTX2ModelNode(Node):
         # quantized weights
         heavy_kwargs: dict = {"device_map": "cpu", "torch_dtype": torch.bfloat16}
 
-        if text_encoder is None:
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            text_encoder = self._load_component(
-                Gemma3ForConditionalGeneration,
-                te_path,
-                "text_encoder",
-                **heavy_kwargs,
-            )
-            mm.set_cached(te_hash, text_encoder)
-            logger.info("text_encoder loaded and cached (%s)", self._describe_model(text_encoder))
-        else:
-            logger.info("text_encoder loaded from cache (%s)", self._describe_model(text_encoder))
+        if not transformer_only:
+            te_hash = mm.component_hash(te_path)
+            text_encoder = mm.get_cached(te_hash)
+            if text_encoder is None:
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                text_encoder = self._load_component(
+                    Gemma3ForConditionalGeneration,
+                    te_path,
+                    "text_encoder",
+                    **heavy_kwargs,
+                )
+                mm.set_cached(te_hash, text_encoder)
+                logger.info("text_encoder loaded and cached (%s)", self._describe_model(text_encoder))
+            else:
+                logger.info("text_encoder loaded from cache (%s)", self._describe_model(text_encoder))
 
         if transformer is None:
             transformer = self._load_component(
@@ -243,16 +260,19 @@ class LTX2ModelNode(Node):
 
         light_kwargs: dict = {"torch_dtype": torch.bfloat16}
 
-        tokenizer = _load_or_reuse("tokenizer", GemmaTokenizer)
+        # Load scheduler (needed for both primary and prefix nodes)
         scheduler = (
             self._prev_values["scheduler_obj"]
             if "scheduler" not in changed and "scheduler_obj" in self._prev_values
             else FlowMatchEulerDiscreteScheduler.from_pretrained(resolved_paths["scheduler"])
         )
-        vae = _load_or_reuse("vae", AutoencoderKLLTX2Video, **light_kwargs)
-        audio_vae = _load_or_reuse("audio_vae", AutoencoderKLLTX2Audio, **light_kwargs)
-        connectors = _load_or_reuse("connectors", LTX2TextConnectors, **light_kwargs)
-        vocoder = _load_or_reuse("vocoder", LTX2Vocoder, **light_kwargs)
+
+        if not transformer_only:
+            tokenizer = _load_or_reuse("tokenizer", GemmaTokenizer)
+            vae = _load_or_reuse("vae", AutoencoderKLLTX2Video, **light_kwargs)
+            audio_vae = _load_or_reuse("audio_vae", AutoencoderKLLTX2Audio, **light_kwargs)
+            connectors = _load_or_reuse("connectors", LTX2TextConnectors, **light_kwargs)
+            vocoder = _load_or_reuse("vocoder", LTX2Vocoder, **light_kwargs)
 
         # Restore original SDNQConfig.__init__ if we patched it
         if _sdnqconfig_patched:
@@ -267,20 +287,19 @@ class LTX2ModelNode(Node):
                     from sdnq.loader import apply_sdnq_options_to_model
 
                     transformer = apply_sdnq_options_to_model(transformer, use_quantized_matmul=True)
-                    text_encoder = apply_sdnq_options_to_model(text_encoder, use_quantized_matmul=True)
-                    logger.info("SDNQ quantized matmul enabled for transformer and text_encoder")
+                    if not transformer_only:
+                        text_encoder = apply_sdnq_options_to_model(text_encoder, use_quantized_matmul=True)
+                    logger.info("SDNQ quantized matmul enabled for transformer%s", " and text_encoder" if not transformer_only else "")
                 else:
                     logger.info("Triton / torch.compile not available — SDNQ models using standard matmul")
             except Exception:
                 logger.info("triton not available — SDNQ models will use standard matmul")
 
-        # Register all nn.Module components for lifecycle management.
-        # When component_prefix is set (e.g. for a 2nd pass model node),
-        # only the transformer is registered under a prefixed name to avoid
-        # overwriting shared components (vae, text_encoder, etc.) that are
-        # already registered by the primary model node.
-        prefix = self.component_prefix
-        if prefix:
+        # Register nn.Module components for lifecycle management.
+        # When component_prefix is set (2nd pass), only register the transformer
+        # under a prefixed name — shared components (vae, text_encoder, etc.)
+        # are already registered by the primary model node.
+        if transformer_only:
             mm.register_component(f"{prefix}transformer", transformer)
         else:
             nn_components = {
@@ -329,10 +348,11 @@ class LTX2ModelNode(Node):
             logger.info("Applying regional compile to transformer blocks (mode=%s)", compile_mode)
             transformer.compile_repeated_blocks(mode=compile_mode)
 
-        # Streaming temporal decode (external tiling with lower peak VRAM)
-        vae._use_streaming_decode = bool(self.streaming_decode)
-        if self.streaming_decode:
-            logger.info("VAE streaming decode enabled")
+        if not transformer_only:
+            # Streaming temporal decode (external tiling with lower peak VRAM)
+            vae._use_streaming_decode = bool(self.streaming_decode)
+            if self.streaming_decode:
+                logger.info("VAE streaming decode enabled")
 
         # Feed-forward chunking (lower peak activation VRAM during denoise)
         from frameartisan.modules.generation.graph.nodes.ff_chunking import (
@@ -351,30 +371,40 @@ class LTX2ModelNode(Node):
 
         transformer_component_name = f"{prefix}transformer" if prefix else "transformer"
 
-        self.values = {
-            "tokenizer": tokenizer,
-            "text_encoder": text_encoder,
-            "transformer": transformer,
-            "vae": vae,
-            "audio_vae": audio_vae,
-            "connectors": connectors,
-            "vocoder": vocoder,
-            "scheduler_config": scheduler_config,
-            "transformer_component_name": transformer_component_name,
-        }
-
-        # Save state for selective reload on next run.
-        self._prev_component_paths = resolved_paths
-        self._prev_values = {
-            "tokenizer": tokenizer,
-            "text_encoder": text_encoder,
-            "transformer": transformer,
-            "vae": vae,
-            "audio_vae": audio_vae,
-            "connectors": connectors,
-            "vocoder": vocoder,
-            "scheduler_obj": scheduler,
-        }
+        if transformer_only:
+            self.values = {
+                "transformer": transformer,
+                "scheduler_config": scheduler_config,
+                "transformer_component_name": transformer_component_name,
+            }
+            self._prev_component_paths = resolved_paths
+            self._prev_values = {
+                "transformer": transformer,
+                "scheduler_obj": scheduler,
+            }
+        else:
+            self.values = {
+                "tokenizer": tokenizer,
+                "text_encoder": text_encoder,
+                "transformer": transformer,
+                "vae": vae,
+                "audio_vae": audio_vae,
+                "connectors": connectors,
+                "vocoder": vocoder,
+                "scheduler_config": scheduler_config,
+                "transformer_component_name": transformer_component_name,
+            }
+            self._prev_component_paths = resolved_paths
+            self._prev_values = {
+                "tokenizer": tokenizer,
+                "text_encoder": text_encoder,
+                "transformer": transformer,
+                "vae": vae,
+                "audio_vae": audio_vae,
+                "connectors": connectors,
+                "vocoder": vocoder,
+                "scheduler_obj": scheduler,
+            }
 
         return self.values
 
