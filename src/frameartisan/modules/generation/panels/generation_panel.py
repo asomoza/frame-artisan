@@ -22,6 +22,8 @@ from superqt import QLabeledDoubleSlider, QLabeledSlider
 from frameartisan.modules.generation.constants import (
     ADVANCED_GUIDANCE_DEFAULTS,
     LTX2_LATENT_UPSAMPLER_DIR,
+    LTX2_TINY_VAE_DIR,
+    LTX2_TINY_VAE_FILENAME,
     MODEL_TYPE_DEFAULTS,
     OFFLOAD_STRATEGIES,
 )
@@ -86,6 +88,7 @@ class GenerationPanel(BasePanel):
         self.event_bus.subscribe("second_pass_model_type_changed", self._on_second_pass_model_type_changed)
         self.event_bus.subscribe("generation_change", self._on_generation_change_for_resolution)
         self.event_bus.subscribe("compile_cache_size", self._on_compile_cache_size)
+        self.event_bus.subscribe("model_downloaded", self._on_model_downloaded)
 
         # Saved slider values for restoring after distilled mode.
         self._saved_steps: int | None = None
@@ -291,6 +294,17 @@ class GenerationPanel(BasePanel):
         self._update_ff_chunks_visibility(self.ff_chunking_checkbox.isChecked())
 
         main_layout.addLayout(ff_chunking_layout)
+
+        # Live preview (requires tiny VAE)
+        self.preview_decode_checkbox = QCheckBox("Live Preview")
+        self.preview_decode_checkbox.setToolTip(
+            "Show a live video preview during denoising using a tiny VAE decoder.\n"
+            "Requires the Tiny VAE model to be downloaded."
+        )
+        self.preview_decode_checkbox.setChecked(bool(getattr(self.gen_settings, "preview_decode", False)))
+        self.preview_decode_checkbox.toggled.connect(self.on_preview_decode_toggled)
+        main_layout.addWidget(self.preview_decode_checkbox)
+        self._update_preview_decode_availability()
 
         # --- 2nd pass (upsample) section ---
         main_layout.addSpacing(10)
@@ -683,6 +697,26 @@ class GenerationPanel(BasePanel):
 
     def on_ff_num_chunks_changed(self, value: int):
         self.event_bus.publish("generation_change", {"attr": "ff_num_chunks", "value": int(value)})
+
+    def on_preview_decode_toggled(self, checked: bool):
+        self.event_bus.publish("generation_change", {"attr": "preview_decode", "value": bool(checked)})
+
+    def _update_preview_decode_availability(self):
+        """Enable the live preview checkbox only if the tiny VAE is downloaded."""
+        models_dir = getattr(self.directories, "models_diffusers", None)
+        if not models_dir:
+            self.preview_decode_checkbox.setEnabled(False)
+            self.preview_decode_checkbox.setChecked(False)
+            return
+        tiny_vae_path = os.path.join(models_dir, LTX2_TINY_VAE_DIR, LTX2_TINY_VAE_FILENAME)
+        available = os.path.isfile(tiny_vae_path)
+        self.preview_decode_checkbox.setEnabled(available)
+        if not available:
+            self.preview_decode_checkbox.setChecked(False)
+
+    def _on_model_downloaded(self, data: dict) -> None:
+        if "tiny_vae" in data.get("variants", []):
+            self._update_preview_decode_availability()
 
     def _update_ff_chunks_visibility(self, visible: bool):
         self._ff_chunks_label.setVisible(visible)

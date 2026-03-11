@@ -64,6 +64,10 @@ class LTX2DenoiseNode(Node):
         self.callback = None
         self.on_start_callback = None
         self.status_callback = None
+        # Exposed for live preview: set during __call__ so callers can unpack latents.
+        self._latent_height: int = 0
+        self._latent_width: int = 0
+        self._latent_num_frames: int = 0
 
     def __call__(self):
         import torch
@@ -107,6 +111,11 @@ class LTX2DenoiseNode(Node):
         rescale_scale = float(self.rescale_scale) if self.rescale_scale is not None else 0.0
         modality_scale = float(self.modality_scale) if self.modality_scale is not None else 1.0
         guidance_skip_step = int(self.guidance_skip_step) if self.guidance_skip_step is not None else 0
+
+        # Expose spatial dims for live latent preview
+        self._latent_height = latent_height
+        self._latent_width = latent_width
+        self._latent_num_frames = latent_num_frames
 
         if transformer is None:
             raise NodeError("transformer input is not connected", self.__class__.__name__)
@@ -313,17 +322,19 @@ class LTX2DenoiseNode(Node):
                             noise_pred_audio_text - noise_pred_audio_uncond
                         )
 
+                    # Predicted clean sample (x0) for preview callback
+                    # For flow matching: x0 = latents - sigma * velocity
+                    pred_x0 = video_latents - t * noise_pred_video
+
                     # Scheduler step
                     if conditioning_mask is not None and clean_latents is not None:
                         # Generalized x0-space blending
                         sigma = t
                         batch_size = video_latents.shape[0]
-                        # velocity → x0: x0 = latents - sigma * velocity
-                        x0 = video_latents - sigma * noise_pred_video
                         # Blend x0 with clean latents using mask
                         cm_batch = conditioning_mask[:batch_size]
                         mask_3d = cm_batch.unsqueeze(-1)  # [B, seq, 1]
-                        x0_blended = x0 * (1 - mask_3d) + clean_latents[:batch_size] * mask_3d
+                        x0_blended = pred_x0 * (1 - mask_3d) + clean_latents[:batch_size] * mask_3d
                         # x0 → blended velocity
                         noise_pred_blended = (video_latents - x0_blended) / sigma
                         video_latents = scheduler.step(noise_pred_blended, t, video_latents, return_dict=False)[0]
@@ -366,9 +377,11 @@ class LTX2DenoiseNode(Node):
                         audio_latents = audio_scheduler.step(noise_pred_audio, t, audio_latents, return_dict=False)[0]
                     # else: full audio conditioning (mask=None, clean present) — skip, audio stays constant
 
-                    # Progress callback
+                    # Progress callback — use pred_x0 for early steps (cleaner preview),
+                    # switch to video_latents for the last 2 steps (converged, no overshoot)
                     if self.callback is not None:
-                        self.callback(i, t, video_latents)
+                        preview = video_latents if i >= len(timesteps) - 2 else pred_x0
+                        self.callback(i, t, preview)
 
                     # Clear compile status after first step (compilation is done)
                     if i == 0 and self.use_torch_compile and self.status_callback is not None:
@@ -632,13 +645,15 @@ class LTX2DenoiseNode(Node):
                         last_noise_pred_video = noise_pred_video
                         last_noise_pred_audio = noise_pred_audio
 
+                    # Predicted clean sample (x0) for preview callback
+                    pred_x0 = video_latents - t * noise_pred_video
+
                     # Scheduler step
                     if conditioning_mask is not None and clean_latents is not None:
                         # Generalized x0-space blending
                         sigma = t
-                        x0 = video_latents - sigma * noise_pred_video
                         mask_3d = conditioning_mask.unsqueeze(-1)  # [B, seq, 1]
-                        x0_blended = x0 * (1 - mask_3d) + clean_latents * mask_3d
+                        x0_blended = pred_x0 * (1 - mask_3d) + clean_latents * mask_3d
                         noise_pred_blended = (video_latents - x0_blended) / sigma
                         video_latents = scheduler.step(noise_pred_blended, t, video_latents, return_dict=False)[0]
                     elif conditioning_mask is not None:
@@ -678,7 +693,8 @@ class LTX2DenoiseNode(Node):
                     # else: full audio conditioning — skip
 
                     if self.callback is not None:
-                        self.callback(i, t, video_latents)
+                        preview = video_latents if i >= len(timesteps) - 2 else pred_x0
+                        self.callback(i, t, preview)
 
                     if i == 0 and self.use_torch_compile and self.status_callback is not None:
                         self.status_callback("")

@@ -88,7 +88,7 @@ class VideoSimpleWidget(QWidget):
         self._video_widget: QVideoWidget | None = None
         self._stack: QStackedWidget | None = None
         self._seeking = False
-        self._looping = False
+        self._looping = True
 
         # Control widgets (created in _init_multimedia or remain None)
         self._play_btn: QPushButton | None = None
@@ -157,6 +157,7 @@ class VideoSimpleWidget(QWidget):
         self._audio_output = QAudioOutput(self)
         self._audio_output.setVolume(1.0)
         self._player.setAudioOutput(self._audio_output)
+        self._player.setLoops(QMediaPlayer.Loops.Infinite)
 
         # --- video area via a stack so the app-background shows when idle ---
         self._stack = QStackedWidget(self)
@@ -226,6 +227,7 @@ class VideoSimpleWidget(QWidget):
             f"QPushButton:checked {{ image: url({loop_icon}); opacity: 1.0;"
             f"  border: 1px solid #58a6ff; border-radius: 4px; background: rgba(88,166,255,0.15); }}"
         )
+        self._loop_btn.setChecked(True)
         self._loop_btn.clicked.connect(self._on_loop_clicked)
         layout.addWidget(self._loop_btn)
 
@@ -300,6 +302,38 @@ class VideoSimpleWidget(QWidget):
     def setAlignment(self, alignment: Qt.AlignmentFlag | Qt.Alignment) -> None:  # noqa: N802
         # Aspect ratio is handled by QVideoWidget internally; nothing to do here.
         pass
+
+    def load_preview_video(self, path: str | Path) -> bool:
+        """Load a preview video, resuming playback from the current position."""
+        if self._player is None:
+            return False
+
+        video_path = Path(path).expanduser()
+        if not video_path.exists():
+            return False
+
+        # Remember where we were
+        resume_pos = self._player.position()
+
+        # Clear source first so the player doesn't ignore the reload
+        self._player.setSource(QUrl())
+        self._player.setSource(QUrl.fromLocalFile(str(video_path.resolve())))
+        self._stack.setCurrentIndex(1)
+        self._set_controls_enabled(True)
+
+        if self._save_btn is not None:
+            self._save_btn.setEnabled(False)
+
+        # Seek to the saved position once media is loaded, then play
+        def _on_status(status):
+            if status == QMediaPlayer.MediaStatus.LoadedMedia:
+                self._player.mediaStatusChanged.disconnect(_on_status)
+                if resume_pos > 0:
+                    self._player.setPosition(resume_pos)
+                self._player.play()
+
+        self._player.mediaStatusChanged.connect(_on_status)
+        return True
 
     def load_video(self, path: str | Path, *, autoplay: bool = False) -> bool:
         if self._player is None:

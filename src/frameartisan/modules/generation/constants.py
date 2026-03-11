@@ -52,6 +52,10 @@ from diffusers.pipelines.ltx2.utils import STAGE_2_DISTILLED_SIGMA_VALUES as LTX
 LTX2_LATENT_UPSAMPLER_REPO = "OzzyGT/LTX2_latent_upsampler"
 LTX2_LATENT_UPSAMPLER_DIR = "LTX2_latent_upsampler"
 
+LTX2_TINY_VAE_REPO = "OzzyGT/LTX2_tiny_vaes"
+LTX2_TINY_VAE_DIR = "LTX2_tiny_vae"
+LTX2_TINY_VAE_FILENAME = "taeltx_2.safetensors"
+
 DEFAULT_NEGATIVE_PROMPT = "worst quality, inconsistent motion, blurry, jittery, distorted"
 
 ADVANCED_GUIDANCE_DEFAULTS: dict[str, float | int | str] = {

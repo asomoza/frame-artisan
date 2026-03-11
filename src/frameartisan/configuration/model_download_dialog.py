@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
 )
 
 from frameartisan.app.directories import DirectoriesObject
+from frameartisan.app.event_bus import EventBus
 from frameartisan.app.preferences import PreferencesObject
 from frameartisan.configuration.model_download_thread import VARIANT_CONFIG
 from frameartisan.utils.database import Database
@@ -30,10 +31,11 @@ _VARIANT_ORDER = [
     "distilled_sdnq_4bit",
     "distilled_sdnq_8bit",
     "latent_upsampler",
+    "tiny_vae",
 ]
 
 # Base variants get full model entries; quantized variants become component variants.
-_BASE_VARIANTS = {"normal", "distilled", "latent_upsampler"}
+_BASE_VARIANTS = {"normal", "distilled", "latent_upsampler", "tiny_vae"}
 
 # Maps quantized variant → which base model its transformer belongs to.
 _TRANSFORMER_PARENT = {
@@ -60,6 +62,8 @@ class ModelDownloadDialog(QDialog):
         self.database = database
         self._download_thread = None
         self._completed_variants: dict[str, str] = {}  # variant_key -> local_path
+
+        self.event_bus = EventBus()
 
         self.setWindowTitle("Download Models")
         self.setMinimumWidth(550)
@@ -145,7 +149,11 @@ class ModelDownloadDialog(QDialog):
 
         for variant_key, cfg in VARIANT_CONFIG.items():
             variant_path = os.path.join(models_dir, cfg["dir_name"])
-            if variant_key in self._STANDALONE_VARIANTS:
+            if variant_key == "tiny_vae":
+                # Tiny VAE is a single safetensors file
+                if os.path.isfile(os.path.join(variant_path, "taeltx_2.safetensors")):
+                    downloaded.add(variant_key)
+            elif variant_key in self._STANDALONE_VARIANTS:
                 # Standalone models don't have transformer/ — check for config.json
                 if os.path.isfile(os.path.join(variant_path, "config.json")):
                     downloaded.add(variant_key)
@@ -159,7 +167,7 @@ class ModelDownloadDialog(QDialog):
     # ------------------------------------------------------------------
 
     # Variants that are standalone and don't require the "normal" base model.
-    _STANDALONE_VARIANTS = {"latent_upsampler"}
+    _STANDALONE_VARIANTS = {"latent_upsampler", "tiny_vae"}
 
     # Distilled quantized variants that require the "distilled" base model.
     _DISTILLED_QUANT_VARIANTS = {"distilled_sdnq_4bit", "distilled_sdnq_8bit"}
@@ -182,9 +190,7 @@ class ModelDownloadDialog(QDialog):
                 normal_cb.setEnabled(True)
 
         # Force "distilled" when any distilled quantized variant is selected.
-        any_distilled_quant = any(
-            self._checkboxes[key].isChecked() for key in self._DISTILLED_QUANT_VARIANTS
-        )
+        any_distilled_quant = any(self._checkboxes[key].isChecked() for key in self._DISTILLED_QUANT_VARIANTS)
         distilled_cb = self._checkboxes["distilled"]
         if "distilled" not in self._already_downloaded:
             if any_distilled_quant:
@@ -245,9 +251,12 @@ class ModelDownloadDialog(QDialog):
     def _on_progress(self, message: str, _current: int, _total: int):
         self._status_label.setText(message)
 
+    # Variants that are auxiliary tools, not models — skip DB registration.
+    _SKIP_REGISTRATION = {"tiny_vae"}
+
     def _on_variant_completed(self, variant_key: str, local_path: str):
         self._completed_variants[variant_key] = local_path
-        if variant_key in _BASE_VARIANTS:
+        if variant_key in _BASE_VARIANTS and variant_key not in self._SKIP_REGISTRATION:
             self._register_model(variant_key, local_path)
 
     def _on_download_finished(self):
@@ -255,6 +264,8 @@ class ModelDownloadDialog(QDialog):
 
         self._progress_bar.setVisible(False)
         self._status_label.setText("Download complete!")
+
+        self.event_bus.publish("model_downloaded", {"variants": list(self._completed_variants.keys())})
 
         self._skip_button.setText("Close")
         self._skip_button.clicked.disconnect()
@@ -433,12 +444,11 @@ class ModelDownloadDialog(QDialog):
                     source_path=transformer_dir,
                     content_hash=content_hash,
                 )
-                registry.add_component_variant_to_sharing_models(
-                    parent_model_id, "transformer", comp_info.id
-                )
+                registry.add_component_variant_to_sharing_models(parent_model_id, "transformer", comp_info.id)
                 logger.info(
                     "Registered transformer variant from %s on model %d",
-                    variant_key, parent_model_id,
+                    variant_key,
+                    parent_model_id,
                 )
 
             # Register text_encoder component as variant on ALL base models
@@ -452,12 +462,11 @@ class ModelDownloadDialog(QDialog):
                     content_hash=content_hash,
                 )
                 for base_key, base_id in base_model_ids.items():
-                    registry.add_component_variant_to_sharing_models(
-                        base_id, "text_encoder", comp_info.id
-                    )
+                    registry.add_component_variant_to_sharing_models(base_id, "text_encoder", comp_info.id)
                 logger.info(
                     "Registered text_encoder variant from %s on %d base models",
-                    variant_key, len(base_model_ids),
+                    variant_key,
+                    len(base_model_ids),
                 )
 
     # ------------------------------------------------------------------

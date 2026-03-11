@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+import numpy as np
 import torch
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -23,6 +26,7 @@ logger = logging.getLogger(__name__)
 class NodeGraphThread(QThread):
     status_changed = pyqtSignal(str)
     progress_update = pyqtSignal(int, torch.Tensor)
+    preview_video_ready = pyqtSignal(str)  # temp video path
     stage_started = pyqtSignal(int)  # total_steps for the new stage
     generation_finished = pyqtSignal(object, object)
     generation_error = pyqtSignal(str, bool)
@@ -51,10 +55,15 @@ class NodeGraphThread(QThread):
         self.save_source_audio: bool = False
         self.save_source_video: bool = False
         self.auto_save_videos: bool = True
+        self.preview_decode: bool = False
+        self.tiny_vae_path: str | None = None
         self._job_json_graph: str | None = None
         self._active_graph: FrameArtisanNodeGraph | None = None
         self._persistent_run_graph: FrameArtisanNodeGraph | None = None
         self._completion_emitted: bool = False
+        self._tiny_vae = None
+        self._preview_temp_paths: list[str] = []
+        self._preview_temp_index: int = 0
 
         self._graph_factory = graph_factory or FrameArtisanNodeGraph
         self._node_classes = node_classes or NODE_CLASSES
@@ -79,7 +88,7 @@ class NodeGraphThread(QThread):
         # Wire 2nd pass denoise callback (per-stage progress: resets to 0)
         sp_denoise = graph.get_node_by_name("second_pass_denoise")
         if sp_denoise is not None:
-            sp_denoise.on_start_callback = lambda total_steps: self.stage_started.emit(total_steps)
+            sp_denoise.on_start_callback = self._on_stage_started
             sp_denoise.callback = self.step_progress_update
 
         image_send = graph.get_node_by_name("image_send")
@@ -131,6 +140,38 @@ class NodeGraphThread(QThread):
         self.wire_callbacks(self._persistent_run_graph)
         return self._persistent_run_graph
 
+    def _load_tiny_vae(self) -> None:
+        """Load the tiny VAE for live preview if enabled and available."""
+        if not self.preview_decode or not self.tiny_vae_path:
+            self._tiny_vae = None
+            return
+        if not os.path.isfile(self.tiny_vae_path):
+            logger.warning("Tiny VAE not found at %s, disabling preview", self.tiny_vae_path)
+            self._tiny_vae = None
+            return
+
+        from frameartisan.modules.generation.graph.nodes.taehv import TAEHV
+
+        self._tiny_vae = TAEHV(
+            checkpoint_path=self.tiny_vae_path,
+            decoder_time_upscale=(False, False),
+        ).to(
+            device=self.device, dtype=torch.float16
+        )
+        self._tiny_vae.eval()
+        logger.info("Tiny VAE loaded for live preview")
+
+    def _get_preview_temp_path(self) -> str:
+        """Return the next temp file path, alternating between two files."""
+        if not self._preview_temp_paths:
+            for i in range(2):
+                fd, path = tempfile.mkstemp(suffix=".mp4", prefix=f"fa_preview_{i}_")
+                os.close(fd)
+                self._preview_temp_paths.append(path)
+        path = self._preview_temp_paths[self._preview_temp_index % 2]
+        self._preview_temp_index += 1
+        return path
+
     def run(self):
         self.status_changed.emit("Generating video...")
         self._completion_emitted = False
@@ -143,6 +184,8 @@ class NodeGraphThread(QThread):
         run_graph.dtype = self.dtype
         run_graph.device = self.device
         self._active_graph = run_graph
+
+        self._load_tiny_vae()
 
         try:
             run_graph()
@@ -166,6 +209,7 @@ class NodeGraphThread(QThread):
                 self.generation_finished.emit(result, duration)
         finally:
             self._active_graph = None
+            self._tiny_vae = None  # free VRAM
 
         if not self._completion_emitted:
             self.generation_aborted.emit()
@@ -187,13 +231,61 @@ class NodeGraphThread(QThread):
         self.node_graph = None
         self.dtype = None
         self.device = None
+        self._tiny_vae = None
+        self._cleanup_preview_temp()
+
+    def _cleanup_preview_temp(self):
+        for path in self._preview_temp_paths:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        self._preview_temp_paths = []
+        self._preview_temp_index = 0
 
     def load_json_graph(self, json_graph: str, callbacks: dict | None = None):
         self._persistent_run_graph = None
         self.node_graph.update_from_json(json_graph, node_classes=self._node_classes, callbacks=callbacks)
 
+    def _on_stage_started(self, total_steps: int) -> None:
+        """Called when the 2nd pass starts. Free the tiny VAE to reclaim VRAM."""
+        if self._tiny_vae is not None:
+            del self._tiny_vae
+            self._tiny_vae = None
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            logger.info("Tiny VAE unloaded before 2nd pass to free VRAM")
+        self.stage_started.emit(total_steps)
+
     def step_progress_update(self, step, _timestep, latents):
         self.progress_update.emit(step, latents)
+        self._emit_preview_video(latents)
+
+    def _emit_preview_video(self, latents: torch.Tensor) -> None:
+        """Decode packed latents with the tiny VAE, encode to temp video, and emit path."""
+        if self._tiny_vae is None:
+            return
+
+        graph = self._active_graph
+        if graph is None:
+            return
+
+        # Only use first-pass denoise — preview is disabled for 2nd pass
+        denoise = graph.get_node_by_name("denoise")
+        if denoise is None or denoise._latent_height == 0:
+            return
+
+        h = denoise._latent_height
+        w = denoise._latent_width
+        f = denoise._latent_num_frames
+        frame_rate = int(getattr(denoise, "frame_rate", 24) or 24)
+
+        try:
+            video_path = self._get_preview_temp_path()
+            _decode_and_encode_preview(latents, h, w, f, self._tiny_vae, video_path, frame_rate)
+            self.preview_video_ready.emit(video_path)
+        except Exception:
+            logger.debug("Preview decode failed", exc_info=True)
 
     def preview_image(self, image):
         self._pending_image = image
@@ -210,3 +302,50 @@ class NodeGraphThread(QThread):
     def on_aborted(self):
         self._completion_emitted = True
         self.generation_aborted.emit()
+
+
+@torch.no_grad()
+def _decode_and_encode_preview(
+    latents: torch.Tensor,
+    h: int,
+    w: int,
+    f: int,
+    tiny_vae,
+    output_path: str,
+    frame_rate: int,
+) -> None:
+    """Unpack latents, decode with the tiny VAE, and encode to an MP4 preview."""
+    import av
+
+    from frameartisan.modules.generation.graph.nodes.ltx2_utils import unpack_latents
+
+    # Unpack from [B, seq_len, C] to [B, C, F, H, W]
+    unpacked = unpack_latents(latents, f, h, w, patch_size=1, patch_size_t=1)
+
+    # TAEHV expects NTCHW — transpose from NCFHW to NFCHW
+    ntchw = unpacked.transpose(1, 2)  # [N, F, C, H, W]
+
+    # Decode with tiny VAE (float16, same device)
+    ntchw = ntchw.to(device=tiny_vae.decoder[1].weight.device, dtype=torch.float16)
+    decoded = tiny_vae.decode_video(ntchw, parallel=True)  # [N, T', 3, H', W'] in [0, 1]
+
+    # Convert to uint8 numpy: [T', H', W', 3]
+    frames = (decoded[0] * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
+    # frames shape: [T', 3, H', W'] — need [T', H', W', 3]
+    frames = np.transpose(frames, (0, 2, 3, 1))
+    frames = np.ascontiguousarray(frames)
+
+    # Encode to MP4 with PyAV
+    with av.open(output_path, "w") as container:
+        stream = container.add_stream("libx264", rate=frame_rate)
+        stream.height = frames.shape[1]
+        stream.width = frames.shape[2]
+        stream.pix_fmt = "yuv420p"
+        stream.options = {"crf": "23", "preset": "ultrafast"}
+
+        for frame_arr in frames:
+            avf = av.VideoFrame.from_ndarray(frame_arr, format="rgb24")
+            for pkt in stream.encode(avf):
+                container.mux(pkt)
+        for pkt in stream.encode(None):
+            container.mux(pkt)

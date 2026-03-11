@@ -83,6 +83,16 @@ VARIANT_CONFIG = {
         "tags": "",
         "version": "1.0",
     },
+    "tiny_vae": {
+        "repo_id": "OzzyGT/LTX2_tiny_vaes",
+        "display_name": "LTX-2 Tiny VAE (Live Preview)",
+        "model_type": 0,
+        "allow_patterns": ["taeltx_2.safetensors"],
+        "dir_name": "LTX2_tiny_vae",
+        "quant_method": "",
+        "tags": "",
+        "version": "1.0",
+    },
 }
 
 # Text-encoder sharing: SDNQ variants at the same bit-width share the same TE,

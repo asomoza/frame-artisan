@@ -14,6 +14,8 @@ from frameartisan.modules.base_module import BaseModule
 from frameartisan.modules.generation.constants import (
     DEFAULT_NEGATIVE_PROMPT,
     LTX2_LATENT_UPSAMPLER_DIR,
+    LTX2_TINY_VAE_DIR,
+    LTX2_TINY_VAE_FILENAME,
     MODEL_TYPE_DEFAULTS,
     SECOND_PASS_MODEL_TYPE_DEFAULTS,
 )
@@ -170,11 +172,13 @@ class GenerationModule(BaseModule):
             node_classes=NODE_CLASSES,
         )
         self.thread.save_video_metadata = self.preferences.save_video_metadata
+        self._sync_preview_decode_settings()
 
         self.thread.generation_finished.connect(self._on_generation_finished)
         self.thread.generation_error.connect(self._on_generation_error)
         self.thread.generation_aborted.connect(self._on_generation_aborted)
         self.thread.progress_update.connect(lambda step, _latents: self.step_progress_update(step + 1))
+        self.thread.preview_video_ready.connect(self._on_preview_video_ready)
         self.thread.stage_started.connect(self._on_stage_started)
         self.thread.status_changed.connect(self._on_status_changed)
 
@@ -559,6 +563,9 @@ class GenerationModule(BaseModule):
                 if model_node is not None:
                     model_node.ff_num_chunks = value
                     model_node.set_updated()
+
+        if attr == "preview_decode":
+            self._sync_preview_decode_settings()
 
         if attr == "second_pass_enabled":
             self._toggle_second_pass(value)
@@ -1179,6 +1186,19 @@ class GenerationModule(BaseModule):
     def _on_abort_clicked(self) -> None:
         if self.thread is not None:
             self.thread.abort_graph()
+
+    def _on_preview_video_ready(self, video_path: str) -> None:
+        """Load the tiny-VAE decoded preview video into the player."""
+        self.video_viewer.load_preview_video(video_path)
+
+    def _sync_preview_decode_settings(self) -> None:
+        """Push preview_decode flag and tiny VAE path to the generation thread."""
+        if self.thread is None:
+            return
+        self.thread.preview_decode = self.gen_settings.preview_decode
+        self.thread.tiny_vae_path = os.path.join(
+            self.directories.models_diffusers, LTX2_TINY_VAE_DIR, LTX2_TINY_VAE_FILENAME
+        )
 
     def _on_auto_save_changed(self, checked: bool) -> None:
         self.preferences.auto_save_videos = checked
