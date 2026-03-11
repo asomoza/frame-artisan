@@ -311,6 +311,8 @@ class ModelManager:
                     modules.append((n, mod))
 
         if strategy == "model_offload":
+            # Track whether we stripped group_offload hooks so we can restore them.
+            actual_strategy = self._applied_strategy
             for name, mod in modules:
                 # Remove any stale group-offload hooks that would block .to()
                 self.remove_offload_hooks(mod)
@@ -322,6 +324,26 @@ class ModelManager:
                 for name, mod in modules:
                     mod.to("cpu")
                     logger.debug("model_offload: moved %s back to CPU", name)
+                # Restore group_offload hooks if the real strategy is group_offload
+                # and we only used model_offload as a temporary override.
+                if actual_strategy == "group_offload":
+                    from diffusers.hooks.group_offloading import apply_group_offloading
+
+                    use_stream = self._group_offload_use_stream
+                    restore_kwargs = dict(
+                        onload_device=torch.device(device) if isinstance(device, str) else device,
+                        offload_device=torch.device("cpu"),
+                        offload_type="leaf_level",
+                        use_stream=use_stream,
+                    )
+                    if use_stream and self._group_offload_low_cpu_mem:
+                        restore_kwargs["low_cpu_mem_usage"] = True
+                    for name, mod in modules:
+                        try:
+                            apply_group_offloading(mod, **restore_kwargs)
+                            logger.debug("model_offload: restored group_offload hooks on %s", name)
+                        except Exception as e:
+                            logger.warning("model_offload: failed to restore hooks on %s: %s", name, e)
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
