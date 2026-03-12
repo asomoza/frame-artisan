@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import logging
 import shutil
 from importlib.resources import files
@@ -467,81 +466,6 @@ class VideoSimpleWidget(QWidget):
         except Exception as exc:
             logger.warning("Failed to save video: %s", exc)
             return
-
-        # Copy source images to the configured outputs directory (with dedup)
-        if self.preferences is not None and self.preferences.save_source_images:
-            stem = src_path.stem
-            temp_dir = Path(self.directories.temp_path)
-            img_dest_dir = Path(self.directories.outputs_source_images)
-            # Try single legacy name and indexed names
-            candidates = [temp_dir / f"{stem}.png"]
-            for i in range(20):
-                candidates.append(temp_dir / f"{stem}_{i}.png")
-            for src_img in candidates:
-                if not src_img.exists():
-                    continue
-                img_hash = hashlib.md5(src_img.read_bytes()).hexdigest()
-                duplicate = False
-                if img_dest_dir.exists():
-                    for existing in img_dest_dir.glob("*.png"):
-                        if hashlib.md5(existing.read_bytes()).hexdigest() == img_hash:
-                            logger.debug("Source image already exists at %s, skipping", existing)
-                            duplicate = True
-                            break
-                if not duplicate:
-                    img_dest_dir.mkdir(parents=True, exist_ok=True)
-                    try:
-                        shutil.copy2(str(src_img), str(img_dest_dir / src_img.name))
-                        logger.debug("Source image saved to %s", img_dest_dir / src_img.name)
-                    except Exception as exc:
-                        logger.warning("Failed to save source image: %s", exc)
-
-        # Copy source audio to the configured outputs directory (with dedup)
-        if self.preferences is not None and self.preferences.save_source_audio:
-            stem = src_path.stem
-            temp_dir = Path(self.directories.temp_path)
-            audio_dest_dir = Path(self.directories.outputs_source_audio)
-            for src_audio in temp_dir.glob(f"{stem}.*"):
-                if src_audio.suffix.lower() not in (".wav", ".mp3", ".flac", ".ogg", ".m4a"):
-                    continue
-                audio_hash = hashlib.md5(src_audio.read_bytes()).hexdigest()
-                duplicate = False
-                if audio_dest_dir.exists():
-                    for existing in audio_dest_dir.iterdir():
-                        if existing.is_file() and hashlib.md5(existing.read_bytes()).hexdigest() == audio_hash:
-                            logger.debug("Source audio already exists at %s, skipping", existing)
-                            duplicate = True
-                            break
-                if not duplicate:
-                    audio_dest_dir.mkdir(parents=True, exist_ok=True)
-                    try:
-                        shutil.copy2(str(src_audio), str(audio_dest_dir / src_audio.name))
-                        logger.debug("Source audio saved to %s", audio_dest_dir / src_audio.name)
-                    except Exception as exc:
-                        logger.warning("Failed to save source audio: %s", exc)
-
-        # Copy source video to the configured outputs directory (with dedup)
-        if self.preferences is not None and self.preferences.save_source_video:
-            stem = src_path.stem
-            temp_dir = Path(self.directories.temp_path)
-            video_dest_dir = Path(self.directories.outputs_source_videos)
-            src_video = temp_dir / f"{stem}_source_video.mp4"
-            if src_video.exists():
-                video_hash = hashlib.md5(src_video.read_bytes()).hexdigest()
-                duplicate = False
-                if video_dest_dir.exists():
-                    for existing in video_dest_dir.iterdir():
-                        if existing.is_file() and hashlib.md5(existing.read_bytes()).hexdigest() == video_hash:
-                            logger.debug("Source video already exists at %s, skipping", existing)
-                            duplicate = True
-                            break
-                if not duplicate:
-                    video_dest_dir.mkdir(parents=True, exist_ok=True)
-                    try:
-                        shutil.copy2(str(src_video), str(video_dest_dir / src_video.name))
-                        logger.debug("Source video saved to %s", video_dest_dir / src_video.name)
-                    except Exception as exc:
-                        logger.warning("Failed to save source video: %s", exc)
 
         if self._save_btn is not None:
             self._save_btn.setEnabled(False)

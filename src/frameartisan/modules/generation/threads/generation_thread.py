@@ -101,24 +101,19 @@ class NodeGraphThread(QThread):
             video_send.json_graph_metadata = self._job_json_graph if self.save_video_metadata else None
             if self.auto_save_videos:
                 video_send.output_dir = str(self.directories.outputs_videos)
-                if self.save_source_images:
-                    video_send.source_image_output_dir = str(self.directories.outputs_source_images)
-                else:
-                    video_send.source_image_output_dir = None
-                if self.save_source_audio:
-                    video_send.source_audio_output_dir = str(self.directories.outputs_source_audio)
-                else:
-                    video_send.source_audio_output_dir = None
-                if self.save_source_video:
-                    video_send.source_video_output_dir = str(self.directories.outputs_source_videos)
-                else:
-                    video_send.source_video_output_dir = None
             else:
                 video_send.output_dir = str(self.directories.temp_path)
-                # Save source image/audio/video to temp so manual save button can find them
-                video_send.source_image_output_dir = str(self.directories.temp_path)
-                video_send.source_audio_output_dir = str(self.directories.temp_path)
-                video_send.source_video_output_dir = str(self.directories.temp_path)
+            # Source files are always persisted to permanent dirs (paths are
+            # embedded in the video metadata and must survive temp cleanup).
+            video_send.source_image_output_dir = (
+                str(self.directories.outputs_source_images) if self.save_source_images else None
+            )
+            video_send.source_audio_output_dir = (
+                str(self.directories.outputs_source_audio) if self.save_source_audio else None
+            )
+            video_send.source_video_output_dir = (
+                str(self.directories.outputs_source_videos) if self.save_source_video else None
+            )
             if self.node_graph is not None:
                 staged_vs = self.node_graph.get_node_by_name("video_send")
                 if staged_vs is not None:

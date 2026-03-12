@@ -862,7 +862,7 @@ class GenerationModule(BaseModule):
 
             from frameartisan.modules.generation.graph.nodes.image_load_node import ImageLoadNode
 
-            node_name = f"condition_image_{condition_id}"
+            node_name = f"source_image_{condition_id}"
             img_node = ImageLoadNode()
             img_node.enabled = self.gen_settings.visual_conditions_enabled
             self.node_graph.add_node(img_node, name=node_name)
@@ -885,7 +885,6 @@ class GenerationModule(BaseModule):
             }
 
             self._sync_conditions_to_node()
-            self._sync_video_send_source_images()
 
         elif action == "update":
             cond = self._visual_conditions.get(condition_id)
@@ -925,7 +924,6 @@ class GenerationModule(BaseModule):
                     self.node_graph.delete_node(img_node)
 
                 self._sync_conditions_to_node()
-                self._sync_video_send_source_images()
 
                 if not self._visual_conditions:
                     self.gen_settings.visual_conditions_enabled = False
@@ -962,24 +960,6 @@ class GenerationModule(BaseModule):
                 video_cond["source_frame_end"] = self._video_condition["source_frame_end"]
             conditions.append(video_cond)
         condition_encode.update_conditions(conditions)
-
-    def _sync_video_send_source_images(self) -> None:
-        """Wire all visual condition images to video_send for source image saving."""
-        if self.node_graph is None:
-            return
-        video_send = self.node_graph.get_node_by_name("video_send")
-        if video_send is None:
-            return
-
-        # Disconnect any existing source_images connections
-        for node, out_name in list(video_send.connections.get("source_images", [])):
-            video_send.disconnect("source_images", node, out_name)
-
-        # Connect all condition image nodes
-        for cond in self._visual_conditions.values():
-            node = self.node_graph.get_node_by_name(cond["node_name"])
-            if node is not None:
-                video_send.connect("source_images", node, "image")
 
     def on_audio_condition_event(self, data: dict) -> None:
         action = data.get("action")
@@ -1051,11 +1031,6 @@ class GenerationModule(BaseModule):
             if condition_encode is not None:
                 condition_encode.connect("videos", vid_node, "frames")
                 condition_encode.enabled = True
-
-            # Wire to video_send for source video saving
-            video_send = self.node_graph.get_node_by_name("video_send")
-            if video_send is not None:
-                video_send.connect("source_video_frames", vid_node, "frames")
 
             self._video_condition = {
                 "video_path": video_path,
@@ -1253,21 +1228,17 @@ class GenerationModule(BaseModule):
             self.event_bus.publish("show_snackbar", {"action": "show", "message": "No generation data found in video"})
             return
 
-        self._apply_loaded_graph_subset(graph_data, video_path=mp4_path)
+        self._apply_loaded_graph_subset(graph_data)
         self.video_viewer.load_video(mp4_path, autoplay=False)
 
-    def _resolve_image_path(self, original_path: str | None, video_path: str | None) -> str | None:
-        """Try original path, then derive from video filename in outputs_source_images."""
-        if original_path and os.path.isfile(original_path):
-            return original_path
-        if video_path:
-            video_stem = os.path.splitext(os.path.basename(video_path))[0]
-            candidate = os.path.join(str(self.directories.outputs_source_images), f"{video_stem}.png")
-            if os.path.isfile(candidate):
-                return candidate
+    @staticmethod
+    def _resolve_path(path: str | None) -> str | None:
+        """Return *path* if the file exists on disk, else ``None``."""
+        if path and os.path.isfile(path):
+            return path
         return None
 
-    def _apply_loaded_graph_subset(self, graph_data: dict, *, video_path: str | None = None) -> None:
+    def _apply_loaded_graph_subset(self, graph_data: dict) -> None:
         """Restore generation parameters from a saved graph JSON dict."""
         # --- Extract simple params via the standard helper ---
         wanted = [
@@ -1482,8 +1453,8 @@ class GenerationModule(BaseModule):
                     logger.warning("Failed to restore LoRA from metadata: %s", e)
 
         # --- Visual conditions restoration ---
-        # Collect condition_image_* nodes and the condition_encode state
-        condition_image_nodes: dict[str, dict] = {}  # node name → node data
+        # Collect source_image_* nodes and the condition_encode state
+        source_image_nodes: dict[str, dict] = {}  # node name → node data
         condition_encode_data = None
         legacy_source_image_data = None
         for node in nodes:
@@ -1492,8 +1463,8 @@ class GenerationModule(BaseModule):
             cls_name = node.get("class", "")
             node_name = node.get("name", "")
             if cls_name == "ImageLoadNode":
-                if node_name.startswith("condition_image_"):
-                    condition_image_nodes[node_name] = node
+                if node_name.startswith("source_image_"):
+                    source_image_nodes[node_name] = node
                 elif node_name == "source_image" and legacy_source_image_data is None:
                     legacy_source_image_data = node
             elif cls_name == "LTX2ConditionEncodeNode":
@@ -1503,23 +1474,27 @@ class GenerationModule(BaseModule):
         for cid in list(self._visual_conditions.keys()):
             self.event_bus.publish("visual_condition", {"action": "remove", "condition_id": cid})
 
-        if condition_encode_data is not None and condition_image_nodes:
+        if condition_encode_data is not None and source_image_nodes:
             # New multi-condition path
             conditions_list = condition_encode_data.get("state", {}).get("conditions", [])
             # Match conditions to image nodes by order
-            sorted_img_names = sorted(condition_image_nodes.keys())
+            sorted_img_names = sorted(source_image_nodes.keys())
+            restored_count = 0
+            enabled_count = 0
             for i, node_name in enumerate(sorted_img_names):
-                img_data = condition_image_nodes[node_name]
+                img_data = source_image_nodes[node_name]
                 if not img_data.get("enabled", False):
                     continue
+                enabled_count += 1
                 state = img_data.get("state", {})
                 original_path = state.get("path")
-                restored_path = self._resolve_image_path(original_path, video_path)
+                restored_path = self._resolve_path(original_path)
                 if not restored_path:
                     continue
 
-                # Extract condition_id from node name (condition_image_<id>)
-                condition_id = node_name.removeprefix("condition_image_")
+                restored_count += 1
+                # Extract condition_id from node name (source_image_<id>)
+                condition_id = node_name.removeprefix("source_image_")
                 # Get frame/strength from conditions list if available
                 cond_meta = conditions_list[i] if i < len(conditions_list) else {}
                 pixel_frame_index = cond_meta.get("pixel_frame_index", 1)
@@ -1537,11 +1512,17 @@ class GenerationModule(BaseModule):
                     },
                 )
 
+            if enabled_count > 0 and restored_count == 0:
+                self.event_bus.publish(
+                    "show_snackbar",
+                    {"action": "show", "message": "Source image(s) not found, restoring as text-to-video"},
+                )
+
         elif legacy_source_image_data is not None and legacy_source_image_data.get("enabled", False):
             # Legacy single-image path — restore as a visual condition
             state = legacy_source_image_data.get("state", {})
             original_path = state.get("path")
-            restored_path = self._resolve_image_path(original_path, video_path)
+            restored_path = self._resolve_path(original_path)
 
             if restored_path:
                 condition_id = str(uuid.uuid4())[:8]

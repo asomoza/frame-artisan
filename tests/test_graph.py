@@ -314,10 +314,10 @@ class TestGraphSerialization:
 
     def test_connection_count_in_json(self, graph):
         parsed = json.loads(graph.to_json())
-        # First pass: 86 + audio_conditioning_mask(latents+denoise+decode=3) = 89
+        # First pass: 84 + audio_conditioning_mask(latents+denoise+decode=3) = 87
         # Second pass: 53 + audio_conditioning_mask(sp_latents+sp_denoise=2) = 55
-        # Total: 89 + 55 = 144
-        assert len(parsed["connections"]) == 144
+        # Total: 87 + 55 = 142
+        assert len(parsed["connections"]) == 142
 
     def test_round_trip_node_names(self, graph):
         json_str = graph.to_json()

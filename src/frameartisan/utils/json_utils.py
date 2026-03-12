@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
+import os
+import shutil
+from pathlib import Path
 from typing import Any, Iterable
 
 from frameartisan.modules.generation.data_objects.model_data_object import ModelDataObject
 from frameartisan.modules.generation.data_objects.scheduler_data_object import SchedulerDataObject
+
+logger = logging.getLogger(__name__)
 
 
 def extract_dict_from_json_graph(json_graph: Any, wanted: Iterable[Any], *, include_missing: bool = False) -> dict:
@@ -272,3 +279,170 @@ def cast_model(value: Any) -> ModelDataObject | None:
         return ModelDataObject()
 
     return ModelDataObject()
+
+
+# ---------------------------------------------------------------------------
+# Source file persistence — copy source files to permanent directories and
+# rewrite paths in graph JSON so that metadata embedded in videos always
+# references stable, deduplicated copies.
+# ---------------------------------------------------------------------------
+
+
+def _find_existing_source(db: Any, kind: str, content_hash: str) -> str | None:
+    """Look up an existing source file by kind and content hash."""
+    row = db.fetch_one(
+        "SELECT id, filepath FROM source_file WHERE kind = ? AND content_hash = ?",
+        (kind, content_hash),
+    )
+    if row is None:
+        return None
+    row_id, filepath = row
+    if os.path.isfile(filepath):
+        return filepath
+    db.execute("DELETE FROM source_file WHERE id = ?", (row_id,))
+    return None
+
+
+def _record_source(db: Any, kind: str, content_hash: str, filepath: str) -> None:
+    """Record a source file in the database, upserting on conflict."""
+    db.execute(
+        "INSERT INTO source_file (kind, content_hash, filepath) VALUES (?, ?, ?) "
+        "ON CONFLICT(kind, content_hash) DO UPDATE SET filepath = excluded.filepath",
+        (kind, content_hash, filepath),
+    )
+
+
+def persist_source_paths_in_graph(
+    json_graph: str,
+    *,
+    source_image_dir: str | None = None,
+    source_audio_dir: str | None = None,
+    source_video_dir: str | None = None,
+) -> str:
+    """Copy source files to permanent directories and rewrite paths in graph JSON.
+
+    Walks the graph nodes looking for:
+    - ``ImageLoadNode`` named ``source_image_*`` → images
+    - ``LTX2AudioEncodeNode`` named ``audio_encode`` → audio (``audio_path``)
+    - ``VideoLoadNode`` named ``condition_video*`` → video
+
+    Uses content-hash deduplication via the ``source_file`` DB table: if an
+    identical file was already saved for the same kind, the existing copy is
+    reused and the path is rewritten to point there.
+
+    Returns the (possibly updated) JSON string.
+    """
+    from frameartisan.app.app import get_app_database_path
+    from frameartisan.utils.database import Database
+
+    try:
+        data = json.loads(json_graph)
+    except Exception:
+        return json_graph
+
+    nodes = data.get("nodes")
+    if not isinstance(nodes, list):
+        return json_graph
+
+    db_path = get_app_database_path()
+    db = Database(db_path) if db_path else None
+
+    updated = False
+
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+
+        cls_name = node.get("class", "")
+        node_name = node.get("name", "")
+        state = node.get("state")
+        if not isinstance(state, dict):
+            continue
+
+        # --- Condition images (ImageLoadNode named source_image_*) ---
+        if cls_name == "ImageLoadNode" and node_name.startswith("source_image_") and source_image_dir:
+            src_path = state.get("path")
+            result = _persist_file(db, src_path, source_image_dir, kind=node_name)
+            if result is not None:
+                state["path"] = result
+                updated = True
+
+        # --- Audio (LTX2AudioEncodeNode named audio_encode) ---
+        elif cls_name == "LTX2AudioEncodeNode" and node_name == "audio_encode" and source_audio_dir:
+            src_path = state.get("audio_path")
+            result = _persist_file(db, src_path, source_audio_dir, kind="audio")
+            if result is not None:
+                state["audio_path"] = result
+                updated = True
+
+        # --- Source video (VideoLoadNode named condition_video*) ---
+        elif cls_name == "VideoLoadNode" and node_name.startswith("condition_video") and source_video_dir:
+            src_path = state.get("path")
+            result = _persist_file(db, src_path, source_video_dir, kind=node_name)
+            if result is not None:
+                state["path"] = result
+                updated = True
+
+    if not updated:
+        return json_graph
+
+    try:
+        return json.dumps(data, ensure_ascii=False)
+    except Exception:
+        return json_graph
+
+
+def _persist_file(
+    db: Any,
+    src_path: str | None,
+    dest_dir: str,
+    *,
+    kind: str,
+) -> str | None:
+    """Copy a single source file to *dest_dir* with dedup. Returns the new path, or ``None`` if nothing to do."""
+    if not src_path or not isinstance(src_path, str) or not src_path.strip():
+        return None
+
+    src = Path(src_path)
+    if not src.is_file():
+        return None
+
+    dest_dir_path = Path(dest_dir)
+
+    # Already in the target directory — nothing to do.
+    try:
+        if src.parent.resolve() == dest_dir_path.resolve():
+            return None
+    except Exception:
+        pass
+
+    content_hash = hashlib.md5(src.read_bytes()).hexdigest()
+
+    if db is not None:
+        existing = _find_existing_source(db, kind, content_hash)
+        if existing is not None:
+            return existing
+
+    dest_dir_path.mkdir(parents=True, exist_ok=True)
+    ext = src.suffix or ".bin"
+    dest = dest_dir_path / f"{kind}_{content_hash[:12]}{ext}"
+
+    # Handle unlikely collision
+    if dest.exists():
+        for seq in range(1, 10_000):
+            candidate = dest_dir_path / f"{kind}_{content_hash[:12]}_{seq}{ext}"
+            if not candidate.exists():
+                dest = candidate
+                break
+
+    try:
+        shutil.copy2(src, dest)
+    except Exception:
+        logger.warning("Failed to copy source file %s → %s", src, dest)
+        return None
+
+    dest_str = str(dest)
+    if db is not None:
+        _record_source(db, kind, content_hash, dest_str)
+
+    return dest_str

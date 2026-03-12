@@ -246,9 +246,6 @@ def create_default_ltx2_graph(
     denoise_node.connect("clean_latents", latents_node, "clean_latents")
     denoise_node.connect("base_num_tokens", latents_node, "base_num_tokens")
 
-    # --- Connection: source image → video_send (for saving alongside video) ---
-    video_send_node.connect("source_images", source_image_node, "image")
-
     # --- Audio encode node (disabled by default) ---
     audio_encode_node = LTX2AudioEncodeNode()
     audio_encode_node.enabled = False
@@ -269,9 +266,6 @@ def create_default_ltx2_graph(
     # --- Connections: latents → decode (audio conditioning) ---
     decode_node.connect("clean_audio_latents", latents_node, "clean_audio_latents")
     decode_node.connect("audio_conditioning_mask", latents_node, "audio_conditioning_mask")
-
-    # --- Connection: audio file path → video_send (for saving alongside video) ---
-    video_send_node.connect("source_audio_path", audio_encode_node, "audio_path")
 
     # ===================================================================
     # 2nd pass (upsample) nodes — all disabled by default

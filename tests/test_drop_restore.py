@@ -120,7 +120,7 @@ class _FakeModule:
 
         # Bind the real methods
         self._apply_loaded_graph_subset = GenerationModule._apply_loaded_graph_subset.__get__(self)
-        self._resolve_image_path = GenerationModule._resolve_image_path.__get__(self)
+        self._resolve_path = GenerationModule._resolve_path
         self.on_model_event = GenerationModule.on_model_event.__get__(self)
 
 
