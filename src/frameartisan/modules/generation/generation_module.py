@@ -1,3 +1,4 @@
+import gc
 import json
 import logging
 import os
@@ -755,8 +756,36 @@ class GenerationModule(BaseModule):
         if action == "clear_vram":
             if self.thread is not None:
                 self.thread.abort_graph()
+                self.thread.clear_node_values()
             get_model_manager().clear()
+            gc.collect()
+            gc.collect()
         elif action == "clear_graph":
+            # Clear VRAM first (same as clear_vram)
+            if self.thread is not None:
+                self.thread.abort_graph()
+                self.thread.clear_node_values()
+            get_model_manager().clear()
+
+            # Reset internal conditioning state
+            self._source_image_path = None
+            self._source_image_layers = []
+            self._visual_conditions.clear()
+            self._pending_condition_id = None
+            self._video_condition = None
+            self._audio_path = None
+            self._audio_from_video = False
+            self.gen_settings.active_loras = []
+
+            # Tell UI panels to reset themselves
+            self.event_bus.publish("graph_cleared", {})
+
+            # Reset prompts to defaults
+            self.prompt_bar.positive_prompt.setPlainText("")
+            self.prompt_bar.previous_positive_prompt = None
+            self.prompt_bar.negative_prompt.setPlainText(DEFAULT_NEGATIVE_PROMPT)
+            self.prompt_bar.previous_negative_prompt = DEFAULT_NEGATIVE_PROMPT
+
             self.build_graph()
         elif action == "clear_compile_cache":
             self._clear_compile_cache()
@@ -1540,6 +1569,65 @@ class GenerationModule(BaseModule):
                     "show_snackbar",
                     {"action": "show", "message": "Source image not found, restoring as text-to-video"},
                 )
+
+        # --- Audio condition restoration ---
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            if node.get("class") == "LTX2AudioEncodeNode" and node.get("name") == "audio_encode":
+                if not node.get("enabled", False):
+                    break
+                state = node.get("state", {})
+                audio_path = state.get("audio_path")
+                restored_audio = self._resolve_path(audio_path)
+                if restored_audio:
+                    self.event_bus.publish(
+                        "audio_condition",
+                        {"action": "add", "audio_path": restored_audio},
+                    )
+                    trim_start = state.get("trim_start_s")
+                    trim_end = state.get("trim_end_s")
+                    if trim_start is not None or trim_end is not None:
+                        self.event_bus.publish(
+                            "audio_condition",
+                            {"action": "update_trim", "trim_start_s": trim_start, "trim_end_s": trim_end},
+                        )
+                break
+
+        # --- Video condition restoration ---
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            if node.get("class") == "VideoLoadNode" and (node.get("name") or "").startswith("condition_video"):
+                if not node.get("enabled", False):
+                    break
+                state = node.get("state", {})
+                video_path = state.get("path")
+                restored_video = self._resolve_path(video_path)
+                if restored_video:
+                    # Get condition settings from the condition_encode node
+                    ce_state = (condition_encode_data or {}).get("state", {})
+                    conditions_list = ce_state.get("conditions", [])
+                    # Video condition is usually the last condition or has type "video"
+                    video_cond_meta = {}
+                    for cond in conditions_list:
+                        if cond.get("type") == "video":
+                            video_cond_meta = cond
+                            break
+
+                    self.event_bus.publish(
+                        "video_condition",
+                        {
+                            "action": "add",
+                            "video_path": restored_video,
+                            "pixel_frame_index": video_cond_meta.get("pixel_frame_index", 1),
+                            "strength": video_cond_meta.get("strength", 1.0),
+                            "mode": video_cond_meta.get("mode", "replace"),
+                            "source_frame_start": video_cond_meta.get("source_frame_start"),
+                            "source_frame_end": video_cond_meta.get("source_frame_end"),
+                        },
+                    )
+                break
 
         # --- Refresh UI panel ---
         gen_panel = self.right_menu.panel_instances.get("Generation")

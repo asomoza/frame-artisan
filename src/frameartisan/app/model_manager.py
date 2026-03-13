@@ -486,12 +486,22 @@ class ModelManager:
             self._group_offload_use_stream = False
             self._group_offload_low_cpu_mem = False
         gc.collect()
+        gc.collect()  # second pass for cyclic refs
         if torch.cuda.is_available():
             try:
                 torch.cuda.empty_cache()
                 torch.cuda.ipc_collect()
             except Exception:
                 pass
+        # Ask glibc to return freed pages to the OS (Linux only).
+        # Without this, RSS stays inflated even though memory is free.
+        try:
+            import ctypes
+
+            libc = ctypes.CDLL("libc.so.6")
+            libc.malloc_trim(0)
+        except Exception:
+            pass
 
 
 _MODEL_MANAGER_SINGLETON: ModelManager | None = None

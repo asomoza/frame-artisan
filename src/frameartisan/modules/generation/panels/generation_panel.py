@@ -368,7 +368,7 @@ class GenerationPanel(BasePanel):
         clear_graph_button.clicked.connect(self.on_clear_graph_clicked)
         main_layout.addWidget(clear_graph_button)
 
-        clear_vram_button = QPushButton("Clear VRAM")
+        clear_vram_button = QPushButton("Clear VRAM && RAM")
         clear_vram_button.setObjectName("red_button")
         clear_vram_button.clicked.connect(self.on_clear_vram_clicked)
         main_layout.addWidget(clear_vram_button)
@@ -790,8 +790,8 @@ class GenerationPanel(BasePanel):
 
     def on_clear_vram_clicked(self):
         if not self._confirm_destructive_action(
-            "Clear VRAM",
-            "This will abort any running generation and unload models from GPU memory. Continue?",
+            "Clear VRAM & RAM",
+            "This will abort any running generation and unload models from GPU and system memory. Continue?",
         ):
             return
         self.event_bus.publish("module", {"action": "clear_vram"})

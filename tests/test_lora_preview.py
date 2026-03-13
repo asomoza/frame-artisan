@@ -279,32 +279,41 @@ class TestExampleGraph:
         assert model_data.example == graph_json
         get_json_graph.assert_called_once()
 
-    def test_example_patches_temp_source_image_path(self, qapp, tmp_path):
+    def test_example_persists_source_image_via_content_hash(self, qapp, tmp_path):
+        from unittest.mock import patch as mock_patch
+
         from frameartisan.modules.generation.lora.lora_edit_widget import LoraEditWidget
+        from frameartisan.utils.database import Database
 
         model_data = _make_model_data()
 
-        # Set up directories with outputs_source_images
+        # Set up directories
         source_images_dir = tmp_path / "outputs" / "source_images"
-        source_images_dir.mkdir(parents=True)
-        permanent_img = source_images_dir / "ltx2_20260101_120000.png"
-        permanent_img.write_bytes(b"fake png")
+        source_audio_dir = tmp_path / "outputs" / "source_audio"
+        source_video_dir = tmp_path / "outputs" / "source_videos"
+
+        # Create a real source image file (persist needs it to exist)
+        user_files = tmp_path / "user_files"
+        user_files.mkdir()
+        temp_img = user_files / "source_image_abc123.png"
+        temp_img.write_bytes(b"fake png content")
 
         dirs = MagicMock()
         dirs.data_path = str(tmp_path)
         dirs.outputs_source_images = str(source_images_dir)
+        dirs.outputs_source_audio = str(source_audio_dir)
+        dirs.outputs_source_videos = str(source_video_dir)
         os.makedirs(os.path.join(str(tmp_path), "loras"), exist_ok=True)
 
         video_viewer = MagicMock()
         video_viewer._video_widget = None
         video_viewer.source_path = str(tmp_path / "videos" / "ltx2_20260101_120000.mp4")
 
-        temp_path = "/tmp/source_image_abc123.png"
         graph_json = json.dumps(
             {
                 "nodes": [
-                    {"class": "ImageLoadNode", "state": {"path": temp_path}},
-                    {"class": "OtherNode", "state": {}},
+                    {"class": "ImageLoadNode", "name": "source_image_abc", "state": {"path": str(temp_img)}},
+                    {"class": "OtherNode", "name": "other", "state": {}},
                 ],
                 "connections": [],
             }
@@ -313,11 +322,17 @@ class TestExampleGraph:
 
         from PyQt6.QtGui import QPixmap
 
-        widget = LoraEditWidget(dirs, model_data, QPixmap(10, 10), video_viewer, get_json_graph)
-        widget.set_model_preview()
+        # Patch get_app_database_path to return None (no DB needed for basic copy)
+        with mock_patch("frameartisan.app.app.get_app_database_path", return_value=None):
+            widget = LoraEditWidget(dirs, model_data, QPixmap(10, 10), video_viewer, get_json_graph)
+            widget.set_model_preview()
 
         saved = json.loads(model_data.example)
-        assert saved["nodes"][0]["state"]["path"] == str(permanent_img)
+        new_path = saved["nodes"][0]["state"]["path"]
+        # Should be in the output dir with content-hash naming
+        assert str(source_images_dir) in new_path
+        assert os.path.isfile(new_path)
+        assert "source_image_abc_" in os.path.basename(new_path)
 
     def test_example_keeps_path_when_no_permanent_image(self, qapp, tmp_path):
         from frameartisan.modules.generation.lora.lora_edit_widget import LoraEditWidget

@@ -172,6 +172,7 @@ class SourceImagesPanel(BasePanel):
 
         self.event_bus.subscribe("visual_condition", self.on_visual_condition_event)
         self.event_bus.subscribe("generation_change", self._on_generation_change)
+        self.event_bus.subscribe("graph_cleared", self._on_graph_cleared)
 
     def init_ui(self):
         self.main_layout = QVBoxLayout()
@@ -277,6 +278,10 @@ class SourceImagesPanel(BasePanel):
                 self.enabled_checkbox.setChecked(False)
             finally:
                 del blocker
+
+    def _on_graph_cleared(self, _data: dict) -> None:
+        for condition_id in list(self._entries):
+            self._remove_condition_entry(condition_id)
 
     #########################################################
     ## SUBSCRIBED BUS EVENTS

@@ -15,6 +15,7 @@ class LoraPanel(BasePanel):
         self.init_ui()
 
         self.event_bus.subscribe("lora", self.on_lora_event)
+        self.event_bus.subscribe("graph_cleared", self._on_graph_cleared)
 
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -93,6 +94,10 @@ class LoraPanel(BasePanel):
             configs.append(cfg)
 
         self.event_bus.publish("generation_change", {"attr": "active_loras", "value": configs})
+
+    def _on_graph_cleared(self, _data: dict) -> None:
+        for lora_id in list(self._items):
+            self._remove_item(lora_id)
 
     #########################################################
     ## SUBSCRIBED BUS EVENTS

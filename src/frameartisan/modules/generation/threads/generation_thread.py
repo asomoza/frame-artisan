@@ -288,6 +288,18 @@ class NodeGraphThread(QThread):
     def preview_video(self, video_path: str):
         self._pending_video_path = video_path
 
+    def clear_node_values(self):
+        """Clear all node output values and mark nodes for re-execution."""
+        if self._persistent_run_graph is not None:
+            for node in self._persistent_run_graph.nodes:
+                node.values.clear()
+                node.updated = True
+                # Clear model node caches so components are reloaded from disk
+                if "_prev_component_paths" in node.__dict__:
+                    node._prev_component_paths.clear()
+                if "_prev_values" in node.__dict__:
+                    node._prev_values.clear()
+
     def abort_graph(self):
         if self._active_graph is not None:
             self._active_graph.abort_graph()

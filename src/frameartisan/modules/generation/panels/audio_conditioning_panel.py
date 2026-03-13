@@ -28,6 +28,7 @@ class AudioConditioningPanel(BasePanel):
         self.init_ui()
 
         self.event_bus.subscribe("audio_condition", self.on_audio_condition_event)
+        self.event_bus.subscribe("graph_cleared", self._on_graph_cleared)
 
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -233,6 +234,22 @@ class AudioConditioningPanel(BasePanel):
             del blocker
 
         self.event_bus.publish("audio_condition", {"action": "remove"})
+
+    def _on_graph_cleared(self, _data: dict) -> None:
+        if self._audio_path is not None:
+            self._audio_path = None
+            self._audio_duration = 0.0
+            self._from_video = False
+            self.file_label.setText("No audio loaded")
+            self.info_label.setText("")
+            self.enabled_checkbox.setEnabled(False)
+            self.remove_button.setEnabled(False)
+            self.source_range_slider.setEnabled(False)
+            blocker = QSignalBlocker(self.enabled_checkbox)
+            try:
+                self.enabled_checkbox.setChecked(False)
+            finally:
+                del blocker
 
     def on_audio_condition_event(self, data: dict) -> None:
         action = data.get("action")

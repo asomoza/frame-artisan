@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import os
-import shutil
 from typing import TYPE_CHECKING, Callable
 
 from PyQt6.QtCore import QBuffer, QIODevice, Qt, pyqtSignal
@@ -162,62 +159,20 @@ class LoraEditWidget(QWidget):
             clip_path = os.path.join(self.directories.data_path, "loras", f"{self.model_data.hash}_preview.mp4")
             extract_preview_clip(source_path, position_ms, clip_path)
 
-        # Example graph
+        # Example graph — persist source files (images, audio, video) using
+        # the same content-hash naming as the video metadata path.
         if self.get_json_graph is not None:
             json_graph = self.get_json_graph()
             if json_graph is not None:
-                json_graph = self._patch_source_image_path(json_graph, source_path)
+                from frameartisan.utils.json_utils import persist_source_paths_in_graph
+
+                json_graph = persist_source_paths_in_graph(
+                    json_graph,
+                    source_image_dir=str(self.directories.outputs_source_images),
+                    source_audio_dir=str(self.directories.outputs_source_audio),
+                    source_video_dir=str(self.directories.outputs_source_videos),
+                )
                 self.model_data.example = json_graph
-
-    def _patch_source_image_path(self, json_graph: str, video_path: str | None) -> str:
-        """Replace temp source image path in the graph JSON with the permanent output path.
-
-        The graph serialises the ImageLoadNode path which may point to a temp file
-        that gets cleaned up. Derive the permanent path from the video filename.
-        If the permanent file doesn't exist yet but a temp copy does, copy it over
-        (with dedup) so the example survives app restarts.
-        """
-        if not video_path:
-            return json_graph
-
-        video_stem = os.path.splitext(os.path.basename(video_path))[0]
-        permanent_dir = str(self.directories.outputs_source_images)
-        permanent_path = os.path.join(permanent_dir, f"{video_stem}.png")
-
-        if not os.path.isfile(permanent_path):
-            # Check if the source image exists in temp and copy it over
-            temp_img = os.path.join(str(self.directories.temp_path), f"{video_stem}.png")
-            if os.path.isfile(temp_img):
-                # Dedup: check if an identical image already exists in outputs
-                img_hash = hashlib.md5(open(temp_img, "rb").read()).hexdigest()
-                existing_match = None
-                if os.path.isdir(permanent_dir):
-                    for f in os.listdir(permanent_dir):
-                        if f.endswith(".png"):
-                            fp = os.path.join(permanent_dir, f)
-                            if hashlib.md5(open(fp, "rb").read()).hexdigest() == img_hash:
-                                existing_match = fp
-                                break
-                if existing_match:
-                    permanent_path = existing_match
-                else:
-                    os.makedirs(permanent_dir, exist_ok=True)
-                    shutil.copy2(temp_img, permanent_path)
-                    logger.debug("Copied source image to %s for LoRA example", permanent_path)
-            else:
-                return json_graph
-
-        try:
-            data = json.loads(json_graph)
-            for node in data.get("nodes", []):
-                if node.get("class") == "ImageLoadNode":
-                    state = node.get("state", {})
-                    if state.get("path") and state["path"] != permanent_path:
-                        state["path"] = permanent_path
-                    break
-            return json.dumps(data)
-        except (json.JSONDecodeError, TypeError):
-            return json_graph
 
     def save_lora_info(self):
         database = Database(os.path.join(self.directories.data_path, "app.db"))

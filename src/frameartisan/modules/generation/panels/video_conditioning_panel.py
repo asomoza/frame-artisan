@@ -36,6 +36,7 @@ class VideoConditioningPanel(BasePanel):
 
         self.event_bus.subscribe("video_condition", self.on_video_condition_event)
         self.event_bus.subscribe("generation_change", self._on_generation_change)
+        self.event_bus.subscribe("graph_cleared", self._on_graph_cleared)
 
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -488,6 +489,36 @@ class VideoConditioningPanel(BasePanel):
         attr = data.get("attr")
         if attr in ("video_duration", "frame_rate"):
             self._update_total_frames(data)
+
+    def _on_graph_cleared(self, _data: dict) -> None:
+        if self._video_path is not None:
+            self._video_path = None
+            self._video_frame_count = 0
+            self._video_fps = 0.0
+            self._has_audio = False
+            self._using_video_audio = False
+            self.file_label.setText("No video loaded")
+            self.info_label.setText("")
+            self.usage_label.setText("")
+            self.frame_slider.setEnabled(False)
+            self.last_frame_btn.setEnabled(False)
+            self.strength_slider.setEnabled(False)
+            self.source_range_slider.setEnabled(False)
+            self.mode_combo.setEnabled(False)
+            self.remove_button.setEnabled(False)
+            self.enabled_checkbox.setEnabled(False)
+            self.use_audio_checkbox.setEnabled(False)
+            self.use_audio_checkbox.setToolTip("Video has no audio track")
+            blocker = QSignalBlocker(self.enabled_checkbox)
+            try:
+                self.enabled_checkbox.setChecked(False)
+            finally:
+                del blocker
+            blocker2 = QSignalBlocker(self.use_audio_checkbox)
+            try:
+                self.use_audio_checkbox.setChecked(False)
+            finally:
+                del blocker2
 
     def on_video_condition_event(self, data: dict) -> None:
         action = data.get("action")
