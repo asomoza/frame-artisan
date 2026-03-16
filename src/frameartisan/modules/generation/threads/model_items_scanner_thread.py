@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import logging
 import os
 from io import BytesIO
+from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -8,6 +11,9 @@ from frameartisan.modules.generation.data_objects.model_item_data_object import 
 from frameartisan.utils.database import Database
 from frameartisan.utils.model_utils import calculate_file_hash
 
+
+if TYPE_CHECKING:
+    from frameartisan.app.component_registry import ComponentRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +218,55 @@ class ModelItemsScannerThread(QThread):
 
         return 1  # unknown transformer, default to LTX-2
 
+    @staticmethod
+    def _fix_ltx2_vae_config(registry: ComponentRegistry, component_id: int) -> None:
+        """Fix LTX 2.0 VAE configs that have decoder_spatial_padding_mode set to 'reflect' instead of 'zeros'.
+
+        NOTE: Only targets the LTX 2.0 VAE (timestep_conditioning=False). The LTX 2.3 VAE
+        has a different config and should NOT be patched by this fix.
+        """
+        import json
+
+        db = registry._db()
+        row = db.fetch_one(
+            "SELECT config_json, storage_path, architecture FROM component WHERE id = ?",
+            (component_id,),
+        )
+        if row is None or row[2] != "AutoencoderKLLTX2Video":
+            return
+
+        config_json, storage_path, _ = row
+        if not config_json:
+            return
+
+        try:
+            config = json.loads(config_json)
+        except Exception:
+            return
+
+        # Only fix the LTX 2.0 VAE — the 2.3 VAE has a different config
+        if config.get("timestep_conditioning") is not False:
+            return
+
+        if config.get("decoder_spatial_padding_mode") != "reflect":
+            return
+
+        config["decoder_spatial_padding_mode"] = "zeros"
+        updated_json = json.dumps(config, indent=2)
+
+        # Update the database
+        db.execute("UPDATE component SET config_json = ? WHERE id = ?", (updated_json, component_id))
+
+        # Update the on-disk config.json
+        config_path = os.path.join(storage_path, "config.json")
+        if os.path.isfile(config_path):
+            try:
+                with open(config_path, "w") as f:
+                    f.write(updated_json + "\n")
+                logger.info("Fixed LTX2 VAE config: decoder_spatial_padding_mode → zeros (%s)", config_path)
+            except Exception as e:
+                logger.warning("Could not update on-disk VAE config: %s", e)
+
     def _register_components(self, model_id: int, model_path: str) -> None:
         """Register component entries for a diffusers model if not already present."""
         try:
@@ -256,5 +311,9 @@ class ModelItemsScannerThread(QThread):
             if component_mapping:
                 registry.register_model_components(model_id, component_mapping)
                 registry.cleanup_after_registration(model_id, model_path)
+
+                # Fix LTX2 VAE config: decoder_spatial_padding_mode should be "zeros"
+                if "vae" in component_mapping:
+                    self._fix_ltx2_vae_config(registry, component_mapping["vae"])
         except Exception as e:
             logger.debug("Failed to register components for model %d: %s", model_id, e)
