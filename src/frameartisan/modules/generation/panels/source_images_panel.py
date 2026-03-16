@@ -70,6 +70,23 @@ class _ConditionEntry(QWidget):
         strength_layout.addWidget(self.strength_slider)
         layout.addLayout(strength_layout)
 
+        # Attention slider (controls how much the model "sees" this condition)
+        attention_layout = QHBoxLayout()
+        attention_layout.addWidget(QLabel("Attention:"))
+        self.attention_slider = QLabeledDoubleSlider()
+        self.attention_slider.setRange(0.0, 1.0)
+        self.attention_slider.setSingleStep(0.05)
+        self.attention_slider.setValue(1.0)
+        self.attention_slider.setOrientation(Qt.Orientation.Horizontal)
+        self.attention_slider.setToolTip(
+            "Controls how strongly the model attends to this condition.\n"
+            "Only affects non-first-frame conditions (keyframes).\n"
+            "1.0 = full attention, 0.0 = ignored"
+        )
+        self.attention_slider.valueChanged.connect(self._on_settings_changed)
+        attention_layout.addWidget(self.attention_slider)
+        layout.addLayout(attention_layout)
+
         # Buttons
         btn_layout = QHBoxLayout()
         edit_btn = QPushButton("Edit")
@@ -115,6 +132,7 @@ class _ConditionEntry(QWidget):
         return {
             "pixel_frame_index": self.pixel_frame_index,
             "strength": self.strength_slider.value(),
+            "attention_scale": self.attention_slider.value(),
         }
 
     def _on_last_toggled(self, checked: bool) -> None:
@@ -139,6 +157,7 @@ class _ConditionEntry(QWidget):
                     "condition_id": self.condition_id,
                     "pixel_frame_index": self.pixel_frame_index,
                     "strength": self.strength_slider.value(),
+                    "attention_scale": self.attention_slider.value(),
                 },
             )
         finally:
@@ -234,7 +253,12 @@ class SourceImagesPanel(BasePanel):
         )
 
     def _add_condition_entry(
-        self, condition_id: str, thumb_path: str, pixel_frame_index: int = 1, strength: float = 1.0
+        self,
+        condition_id: str,
+        thumb_path: str,
+        pixel_frame_index: int = 1,
+        strength: float = 1.0,
+        attention_scale: float = 1.0,
     ) -> None:
         entry = _ConditionEntry(condition_id, self, self._total_frames)
         entry.set_thumb(thumb_path)
@@ -251,6 +275,12 @@ class SourceImagesPanel(BasePanel):
         blocker = QSignalBlocker(entry.strength_slider)
         try:
             entry.strength_slider.setValue(strength)
+        finally:
+            del blocker
+
+        blocker = QSignalBlocker(entry.attention_slider)
+        try:
+            entry.attention_slider.setValue(attention_scale)
         finally:
             del blocker
 

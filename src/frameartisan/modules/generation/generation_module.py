@@ -435,6 +435,15 @@ class GenerationModule(BaseModule):
         self.thread.save_source_audio = self.preferences.save_source_audio
         self.thread.save_source_video = self.preferences.save_source_video
         self.thread.auto_save_videos = self.prompt_bar.generate_button.auto_save
+        # Debug: log audio_encode state at generation time
+        audio_encode = self.node_graph.get_node_by_name("audio_encode")
+        if audio_encode is not None:
+            logger.debug(
+                "Generation start: audio_encode enabled=%s, updated=%s, path=%s, gen_settings.audio_conditioning_enabled=%s",
+                audio_encode.enabled, audio_encode.updated, audio_encode.audio_path,
+                self.gen_settings.audio_conditioning_enabled,
+            )
+
         json_graph = self.node_graph.to_json()
         self.thread.start_generation(json_graph)
         self.prompt_bar.set_generating(True)
@@ -565,7 +574,7 @@ class GenerationModule(BaseModule):
                     model_node.ff_num_chunks = value
                     model_node.set_updated()
 
-        if attr == "preview_decode":
+        if attr in ("preview_decode", "preview_time_upscale", "preview_space_upscale"):
             self._sync_preview_decode_settings()
 
         if attr == "second_pass_enabled":
@@ -911,6 +920,7 @@ class GenerationModule(BaseModule):
                 "node_name": node_name,
                 "pixel_frame_index": pixel_frame_index,
                 "strength": strength,
+                "attention_scale": data.get("attention_scale", 1.0),
             }
 
             self._sync_conditions_to_node()
@@ -937,6 +947,8 @@ class GenerationModule(BaseModule):
                 cond["pixel_frame_index"] = data["pixel_frame_index"]
             if "strength" in data:
                 cond["strength"] = data["strength"]
+            if "attention_scale" in data:
+                cond["attention_scale"] = data["attention_scale"]
             self._sync_conditions_to_node()
 
         elif action == "remove":
@@ -973,6 +985,7 @@ class GenerationModule(BaseModule):
                 "type": "image",
                 "pixel_frame_index": cond["pixel_frame_index"],
                 "strength": cond["strength"],
+                "attention_scale": cond.get("attention_scale", 1.0),
             }
             for cond in self._visual_conditions.values()
         ]
@@ -982,6 +995,7 @@ class GenerationModule(BaseModule):
                 "mode": self._video_condition.get("mode", "replace"),
                 "pixel_frame_index": self._video_condition["pixel_frame_index"],
                 "strength": self._video_condition["strength"],
+                "attention_scale": self._video_condition.get("attention_scale", 1.0),
             }
             if self._video_condition.get("source_frame_start") is not None:
                 video_cond["source_frame_start"] = self._video_condition["source_frame_start"]
@@ -997,13 +1011,25 @@ class GenerationModule(BaseModule):
             audio_path = data.get("audio_path")
             self._audio_path = audio_path
             self._audio_from_video = data.get("from_video", False)
+            trim_start = data.get("trim_start_s")
+            trim_end = data.get("trim_end_s")
+            logger.debug(
+                "Audio condition add: path=%s, from_video=%s, trim=(%s, %s)",
+                audio_path, self._audio_from_video, trim_start, trim_end,
+            )
             if self.node_graph is not None:
                 audio_encode = self.node_graph.get_node_by_name("audio_encode")
                 if audio_encode is not None:
                     audio_encode.update_path(audio_path)
-                    audio_encode.update_trim(None, None)
+                    audio_encode.update_trim(trim_start, trim_end)
                     audio_encode.enabled = True
                     audio_encode.set_updated()
+                    logger.debug(
+                        "Audio encode node: enabled=%s, path=%s, trim=(%s, %s), updated=%s",
+                        audio_encode.enabled, audio_encode.audio_path,
+                        audio_encode.trim_start_s, audio_encode.trim_end_s,
+                        audio_encode.updated,
+                    )
 
         elif action == "update_trim":
             if self.node_graph is not None:
@@ -1066,6 +1092,7 @@ class GenerationModule(BaseModule):
                 "node_name": node_name,
                 "pixel_frame_index": pixel_frame_index,
                 "strength": strength,
+                "attention_scale": data.get("attention_scale", 1.0),
                 "mode": data.get("mode", "replace"),
                 "source_frame_start": data.get("source_frame_start"),
                 "source_frame_end": data.get("source_frame_end"),
@@ -1080,6 +1107,8 @@ class GenerationModule(BaseModule):
                 self._video_condition["pixel_frame_index"] = data["pixel_frame_index"]
             if "strength" in data:
                 self._video_condition["strength"] = data["strength"]
+            if "attention_scale" in data:
+                self._video_condition["attention_scale"] = data["attention_scale"]
             if "mode" in data:
                 self._video_condition["mode"] = data["mode"]
             if "source_frame_start" in data:
@@ -1200,6 +1229,8 @@ class GenerationModule(BaseModule):
         if self.thread is None:
             return
         self.thread.preview_decode = self.gen_settings.preview_decode
+        self.thread.preview_time_upscale = self.gen_settings.preview_time_upscale
+        self.thread.preview_space_upscale = self.gen_settings.preview_space_upscale
         self.thread.tiny_vae_path = os.path.join(
             self.directories.models_diffusers, LTX2_TINY_VAE_DIR, LTX2_TINY_VAE_FILENAME
         )

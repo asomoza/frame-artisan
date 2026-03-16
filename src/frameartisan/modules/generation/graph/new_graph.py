@@ -234,6 +234,13 @@ def create_default_ltx2_graph(
     latents_node.connect("concat_positions", condition_encode_node, "concat_positions")
     latents_node.connect("concat_conditioning_mask", condition_encode_node, "concat_conditioning_mask")
 
+    # --- Connections: condition encode → latents (keyframe path) ---
+    latents_node.connect("keyframe_latents", condition_encode_node, "keyframe_latents")
+    latents_node.connect("keyframe_positions", condition_encode_node, "keyframe_positions")
+    latents_node.connect("keyframe_strengths", condition_encode_node, "keyframe_strengths")
+    latents_node.connect("keyframe_group_sizes", condition_encode_node, "keyframe_group_sizes")
+    latents_node.connect("keyframe_attention_scales", condition_encode_node, "keyframe_attention_scales")
+
     # --- Connections: lora → condition_encode (downscale_factor for concat mode) ---
     condition_encode_node.connect("reference_downscale_factor", lora_node, "reference_downscale_factor")
 
@@ -245,6 +252,8 @@ def create_default_ltx2_graph(
     denoise_node.connect("conditioning_mask", latents_node, "conditioning_mask")
     denoise_node.connect("clean_latents", latents_node, "clean_latents")
     denoise_node.connect("base_num_tokens", latents_node, "base_num_tokens")
+    denoise_node.connect("keyframe_group_sizes", latents_node, "keyframe_group_sizes")
+    denoise_node.connect("keyframe_attention_scales", latents_node, "keyframe_attention_scales")
 
     # --- Audio encode node (disabled by default) ---
     audio_encode_node = LTX2AudioEncodeNode()

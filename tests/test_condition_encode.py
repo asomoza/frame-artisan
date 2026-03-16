@@ -20,6 +20,11 @@ class TestConditionEncodeNodeMetadata:
             "concat_latents",
             "concat_positions",
             "concat_conditioning_mask",
+            "keyframe_latents",
+            "keyframe_positions",
+            "keyframe_strengths",
+            "keyframe_group_sizes",
+            "keyframe_attention_scales",
         }
 
     def test_serialize_include(self):

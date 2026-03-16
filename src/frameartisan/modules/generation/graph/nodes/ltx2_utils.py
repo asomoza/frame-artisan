@@ -204,6 +204,69 @@ def calculate_shift(
     return image_seq_len * m + b
 
 
+def build_keyframe_attention_mask(
+    num_base_tokens: int,
+    keyframe_group_sizes: list[int],
+    attention_scales: list[float] | None = None,
+    dtype: torch.dtype = torch.float32,
+    device: torch.device | None = None,
+) -> torch.Tensor | None:
+    """Build self-attention mask for keyframe conditioning.
+
+    Follows the original LTX-2 ``build_attention_mask`` structure:
+    * Base tokens (noisy + any concat tokens) fully attend to everything.
+    * Each keyframe group fully attends to base tokens and itself.
+    * Different keyframe groups do NOT attend to each other.
+
+    Args:
+        num_base_tokens: Number of noisy + concat tokens (attend to everything).
+        keyframe_group_sizes: Number of tokens per keyframe group.
+        attention_scales: Per-group attention scale in ``[0, 1]``.  Controls how
+            strongly base tokens attend to each keyframe group (and vice versa).
+            ``1.0`` = full attention, ``0.0`` = masked.  Converted to log-space
+            additive bias: ``log(scale)`` so that SDPA softmax sees the correct
+            weight.  ``None`` defaults to ``1.0`` for every group.
+        dtype: Output dtype (must match model compute dtype for SDPA).
+        device: Output device.
+
+    Returns:
+        ``(1, T, T)`` additive-bias tensor (0.0 = full attend, large
+        negative = masked) ready for ``Attention.prepare_attention_mask``,
+        or ``None`` when there are no keyframe groups.
+    """
+    if not keyframe_group_sizes:
+        return None
+
+    total = num_base_tokens + sum(keyframe_group_sizes)
+    # Start with full attention (0.0 additive bias)
+    mask = torch.zeros(1, total, total, dtype=dtype, device=device)
+
+    neg_inf = -10000.0
+
+    offset_i = num_base_tokens
+    for i, size_i in enumerate(keyframe_group_sizes):
+        # Per-group attention scale: log-space bias for base↔keyframe cross-attention
+        if attention_scales is not None and attention_scales[i] < 1.0:
+            scale = max(attention_scales[i], 1e-6)  # clamp to avoid log(0)
+            import math
+
+            bias = math.log(scale)
+            # Base tokens attending to this keyframe group
+            mask[:, :num_base_tokens, offset_i : offset_i + size_i] = bias
+            # This keyframe group attending to base tokens
+            mask[:, offset_i : offset_i + size_i, :num_base_tokens] = bias
+
+        # Block out cross-attention between different keyframe groups
+        offset_j = num_base_tokens
+        for j, size_j in enumerate(keyframe_group_sizes):
+            if i != j:
+                mask[:, offset_i : offset_i + size_i, offset_j : offset_j + size_j] = neg_inf
+            offset_j += size_j
+        offset_i += size_i
+
+    return mask
+
+
 def vae_temporal_decode_streaming(
     vae,
     latents_cpu: torch.Tensor,

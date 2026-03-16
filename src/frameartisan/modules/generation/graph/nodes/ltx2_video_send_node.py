@@ -72,6 +72,12 @@ def _encode_video_pyav(
                 audio_np = audio.numpy() if hasattr(audio, "numpy") else np.asarray(audio)
                 if audio_np.ndim == 1:
                     audio_np = audio_np[np.newaxis, :]  # (1, samples)
+                logger.debug(
+                    "Audio mux: shape=%s, dtype=%s, min=%.4f, max=%.4f, mean=%.4f, sample_rate=%d",
+                    audio_np.shape, audio_np.dtype,
+                    float(audio_np.min()), float(audio_np.max()), float(audio_np.mean()),
+                    audio_sample_rate,
+                )
                 a_stream = container.add_stream(audio_codec)
                 a_stream.bit_rate = audio_bitrate_kbps * 1000
                 a_stream.sample_rate = audio_sample_rate
@@ -84,10 +90,13 @@ def _encode_video_pyav(
                     af = av.AudioFrame.from_ndarray(chunk.astype(np.float32), format="fltp", layout=a_stream.layout)
                     af.sample_rate = audio_sample_rate
                     audio_frames.append(af)
+                logger.debug("Audio mux: prepared %d chunks, %d total samples", len(audio_frames), num_samples)
             except Exception as exc:
                 logger.warning("Audio preparation failed (%s); saving video-only", exc)
                 a_stream = None
                 audio_frames = []
+        else:
+            logger.debug("Audio mux: no audio provided (audio=None)")
 
         # --- encode video frames ---
         for frame_arr in video:

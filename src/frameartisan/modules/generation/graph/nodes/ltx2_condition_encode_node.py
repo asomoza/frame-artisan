@@ -30,6 +30,11 @@ class LTX2ConditionEncodeNode(Node):
         "concat_latents",
         "concat_positions",
         "concat_conditioning_mask",
+        "keyframe_latents",
+        "keyframe_positions",
+        "keyframe_strengths",
+        "keyframe_group_sizes",
+        "keyframe_attention_scales",
     ]
     SERIALIZE_INCLUDE: ClassVar[set[str]] = {"conditions"}
 
@@ -115,6 +120,11 @@ class LTX2ConditionEncodeNode(Node):
                 "concat_latents": None,
                 "concat_positions": None,
                 "concat_conditioning_mask": None,
+                "keyframe_latents": None,
+                "keyframe_positions": None,
+                "keyframe_strengths": None,
+                "keyframe_group_sizes": None,
+                "keyframe_attention_scales": None,
             }
             return self.values
 
@@ -124,6 +134,16 @@ class LTX2ConditionEncodeNode(Node):
         ref_downscale = int(self.reference_downscale_factor) if self.reference_downscale_factor is not None else 1
 
         # First pass: replace conditions (write into clean_latents/conditioning_mask in-place)
+        # Frame 0 conditions use in-place replacement (VideoConditionByLatentIndex).
+        # Non-frame-0 conditions use the keyframe append approach
+        # (VideoConditionByKeyframeIndex) — the original LTX-2 method that avoids
+        # the "pause + quality shift" artefact.
+        keyframe_tokens_list: list[torch.Tensor] = []
+        keyframe_positions_list: list[torch.Tensor] = []
+        keyframe_strengths_list: list[float] = []
+        keyframe_attention_scales_list: list[float] = []
+        keyframe_group_sizes: list[int] = []
+
         image_idx = 0
         video_idx = 0
         for i, condition in enumerate(self.conditions):
@@ -131,63 +151,150 @@ class LTX2ConditionEncodeNode(Node):
             mode = condition.get("mode", "replace")
             pixel_frame_index = int(condition.get("pixel_frame_index", 1))
             strength = float(condition.get("strength", 1.0))
+            attention_scale = float(condition.get("attention_scale", 1.0))
+
+            if mode != "replace":
+                # Non-replace conditions handled in second pass (concat)
+                if cond_type == "video":
+                    video_idx += 1
+                else:
+                    image_idx += 1
+                continue
+
+            # Resolve pixel frame index → latent frame index
+            resolved_pfi = pixel_frame_index
+            if resolved_pfi < 0:
+                resolved_pfi = num_frames_snapped + resolved_pfi + 1
+            latent_idx = (resolved_pfi - 1) // vae_temporal_ratio
+            latent_idx = max(0, min(latent_idx, latent_num_frames - 1))
+            is_frame_zero = latent_idx == 0
 
             if cond_type == "video":
-                if mode != "replace":
-                    video_idx += 1
-                    continue
                 if video_idx >= len(raw_videos):
                     video_idx += 1
                     continue
-                # Source frame range: 1-based inclusive, slice the video frames
                 source_start = int(condition.get("source_frame_start", 1))
                 source_end = int(condition.get("source_frame_end", 0))
                 video_clip = raw_videos[video_idx]
                 if source_start >= 1 and source_end >= source_start:
                     video_clip = video_clip[source_start - 1 : source_end]
-                self._encode_video_condition(
-                    video_clip,
-                    pixel_frame_index,
-                    strength,
-                    vae,
-                    mm,
-                    device,
-                    height,
-                    width,
-                    num_frames_snapped,
-                    vae_temporal_ratio,
-                    vae_spatial_ratio,
-                    latent_num_frames,
-                    latents_mean,
-                    latents_std,
-                    clean_latents,
-                    conditioning_mask,
-                    i,
-                )
+
+                if is_frame_zero:
+                    # Frame 0: in-place replacement (original VideoConditionByLatentIndex)
+                    self._encode_video_condition(
+                        video_clip,
+                        pixel_frame_index,
+                        strength,
+                        vae,
+                        mm,
+                        device,
+                        height,
+                        width,
+                        num_frames_snapped,
+                        vae_temporal_ratio,
+                        vae_spatial_ratio,
+                        latent_num_frames,
+                        latents_mean,
+                        latents_std,
+                        clean_latents,
+                        conditioning_mask,
+                        i,
+                    )
+                else:
+                    # Non-frame-0: keyframe tokens (original VideoConditionByKeyframeIndex)
+                    result = self._encode_video_keyframe(
+                        video_clip,
+                        pixel_frame_index,
+                        strength,
+                        vae,
+                        mm,
+                        device,
+                        height,
+                        width,
+                        num_frames_snapped,
+                        vae_temporal_ratio,
+                        vae_spatial_ratio,
+                        latent_num_frames,
+                        latent_height,
+                        latent_width,
+                        latents_mean,
+                        latents_std,
+                        frame_rate,
+                        i,
+                    )
+                    if result is not None:
+                        tokens, positions, num_tokens = result
+                        keyframe_tokens_list.append(tokens)
+                        keyframe_positions_list.append(positions)
+                        keyframe_strengths_list.append(strength)
+                        keyframe_attention_scales_list.append(attention_scale)
+                        keyframe_group_sizes.append(num_tokens)
                 video_idx += 1
             else:
                 if image_idx >= len(raw_images):
                     image_idx += 1
                     continue
-                self._encode_image_condition(
-                    raw_images[image_idx],
-                    pixel_frame_index,
-                    strength,
-                    vae,
-                    mm,
-                    device,
-                    height,
-                    width,
-                    num_frames_snapped,
-                    vae_temporal_ratio,
-                    latent_num_frames,
-                    latents_mean,
-                    latents_std,
-                    clean_latents,
-                    conditioning_mask,
-                    i,
-                )
+
+                if is_frame_zero:
+                    # Frame 0: in-place replacement
+                    self._encode_image_condition(
+                        raw_images[image_idx],
+                        pixel_frame_index,
+                        strength,
+                        vae,
+                        mm,
+                        device,
+                        height,
+                        width,
+                        num_frames_snapped,
+                        vae_temporal_ratio,
+                        latent_num_frames,
+                        latents_mean,
+                        latents_std,
+                        clean_latents,
+                        conditioning_mask,
+                        i,
+                    )
+                else:
+                    # Non-frame-0: keyframe tokens
+                    result = self._encode_image_keyframe(
+                        raw_images[image_idx],
+                        pixel_frame_index,
+                        strength,
+                        vae,
+                        mm,
+                        device,
+                        height,
+                        width,
+                        num_frames_snapped,
+                        vae_temporal_ratio,
+                        latent_num_frames,
+                        latent_height,
+                        latent_width,
+                        latents_mean,
+                        latents_std,
+                        frame_rate,
+                        i,
+                    )
+                    if result is not None:
+                        tokens, positions, num_tokens = result
+                        keyframe_tokens_list.append(tokens)
+                        keyframe_positions_list.append(positions)
+                        keyframe_strengths_list.append(strength)
+                        keyframe_attention_scales_list.append(attention_scale)
+                        keyframe_group_sizes.append(num_tokens)
                 image_idx += 1
+
+        # Keyframe outputs
+        keyframe_latents = None
+        keyframe_positions = None
+        keyframe_strengths = None
+        keyframe_attention_scales = None
+        if keyframe_tokens_list:
+            keyframe_latents = torch.cat(keyframe_tokens_list, dim=1)
+            keyframe_positions = torch.cat(keyframe_positions_list, dim=2)
+            keyframe_strengths = keyframe_strengths_list
+            keyframe_attention_scales = keyframe_attention_scales_list
 
         # Second pass: concat conditions (collect into lists, then cat)
         concat_tokens_list: list[torch.Tensor] = []
@@ -255,10 +362,12 @@ class LTX2ConditionEncodeNode(Node):
             concat_conditioning_mask = torch.cat(concat_masks_list, dim=1)
 
         logger.info(
-            "Conditions encoded: clean_latents %s, conditioning_mask %s, concat_tokens=%s",
+            "Conditions encoded: clean_latents %s, conditioning_mask %s, concat_tokens=%s, keyframe_tokens=%s (%s groups)",
             clean_latents.shape,
             conditioning_mask.shape,
             concat_latents.shape if concat_latents is not None else None,
+            keyframe_latents.shape if keyframe_latents is not None else None,
+            len(keyframe_group_sizes) if keyframe_group_sizes else 0,
         )
 
         self.values = {
@@ -267,6 +376,11 @@ class LTX2ConditionEncodeNode(Node):
             "concat_latents": concat_latents,
             "concat_positions": concat_positions,
             "concat_conditioning_mask": concat_conditioning_mask,
+            "keyframe_latents": keyframe_latents,
+            "keyframe_positions": keyframe_positions,
+            "keyframe_strengths": keyframe_strengths,
+            "keyframe_group_sizes": keyframe_group_sizes if keyframe_group_sizes else None,
+            "keyframe_attention_scales": keyframe_attention_scales,
         }
         return self.values
 
@@ -584,3 +698,216 @@ class LTX2ConditionEncodeNode(Node):
         )
 
         return concat_tokens, positions, denoise_mask
+
+    @staticmethod
+    def _encode_image_keyframe(
+        image,
+        pixel_frame_index: int,
+        strength: float,
+        vae,
+        mm,
+        device,
+        height: int,
+        width: int,
+        num_frames_snapped: int,
+        vae_temporal_ratio: int,
+        latent_num_frames: int,
+        latent_height: int,
+        latent_width: int,
+        latents_mean,
+        latents_std,
+        frame_rate: float,
+        condition_index: int,
+    ) -> tuple | None:
+        """Encode a single-frame image as keyframe tokens (appended to sequence).
+
+        Follows the original LTX-2 ``VideoConditionByKeyframeIndex`` approach:
+        tokens are appended to the sequence and referenced via self-attention.
+
+        Returns ``(packed_tokens, positions, num_tokens)`` or ``None``.
+        """
+        import torch
+
+        from frameartisan.modules.generation.graph.nodes.ltx2_utils import (
+            get_pixel_coords,
+            normalize_latents,
+            pack_latents,
+        )
+
+        # Resolve pixel frame index → latent frame index
+        if pixel_frame_index < 0:
+            pixel_frame_index = num_frames_snapped + pixel_frame_index + 1
+        latent_idx = (pixel_frame_index - 1) // vae_temporal_ratio
+        latent_idx = max(0, min(latent_idx, latent_num_frames - 1))
+
+        # Preprocess image: numpy HWC uint8 → torch [1, C, H, W] float32 in [-1, 1]
+        image_tensor = torch.from_numpy(image).float() / 255.0
+        image_tensor = image_tensor * 2.0 - 1.0
+        image_tensor = image_tensor.permute(2, 0, 1).unsqueeze(0)
+
+        # Resize to target dimensions
+        image_tensor = torch.nn.functional.interpolate(
+            image_tensor, size=(height, width), mode="bilinear", align_corners=False
+        )
+
+        # Add temporal dimension: [1, C, 1, H, W]
+        image_tensor = image_tensor.unsqueeze(2)
+
+        # VAE encode
+        with mm.use_components("vae", device=device, strategy_override="model_offload"):
+            image_tensor = image_tensor.to(device=device, dtype=vae.dtype)
+            init_latents = vae.encode(image_tensor).latent_dist.mode()
+
+        # Normalize latents (keep float32)
+        if latents_mean is not None and latents_std is not None:
+            init_latents = normalize_latents(init_latents.float(), latents_mean, latents_std)
+
+        init_latents = init_latents.cpu()
+
+        # Pack 5D → 3D: [1, num_tokens, features]
+        packed_tokens = pack_latents(init_latents, patch_size=1, patch_size_t=1)
+
+        # Generate position embeddings with frame_idx offset
+        positions = get_pixel_coords(
+            latent_height=latent_height,
+            latent_width=latent_width,
+            latent_num_frames=1,  # single frame
+            frame_idx=latent_idx,
+            fps=frame_rate,
+            vae_spatial_scale=getattr(vae, "spatial_compression_ratio", 32),
+            vae_temporal_scale=vae_temporal_ratio,
+        )
+
+        num_tokens = packed_tokens.shape[1]
+
+        logger.info(
+            "Condition %d (keyframe image): pixel_frame=%d → latent_idx=%d, %d tokens, strength=%.2f",
+            condition_index,
+            pixel_frame_index,
+            latent_idx,
+            num_tokens,
+            strength,
+        )
+
+        return packed_tokens, positions, num_tokens
+
+    @staticmethod
+    def _encode_video_keyframe(
+        video_frames,
+        pixel_frame_index: int,
+        strength: float,
+        vae,
+        mm,
+        device,
+        height: int,
+        width: int,
+        num_frames_snapped: int,
+        vae_temporal_ratio: int,
+        vae_spatial_ratio: int,
+        latent_num_frames: int,
+        latent_height: int,
+        latent_width: int,
+        latents_mean,
+        latents_std,
+        frame_rate: float,
+        condition_index: int,
+    ) -> tuple | None:
+        """Encode a video clip as keyframe tokens (appended to sequence).
+
+        Returns ``(packed_tokens, positions, num_tokens)`` or ``None``.
+        """
+        import math
+
+        import torch
+
+        from frameartisan.modules.generation.graph.nodes.ltx2_utils import (
+            get_pixel_coords,
+            normalize_latents,
+            pack_latents,
+        )
+
+        total_video_frames = video_frames.shape[0]
+
+        if pixel_frame_index < 0:
+            pixel_frame_index = num_frames_snapped + pixel_frame_index + 1
+
+        available = num_frames_snapped - (pixel_frame_index - 1)
+        available = max(available, 0)
+        use_frames = min(total_video_frames, available)
+
+        if use_frames <= 0:
+            logger.warning(
+                "Condition %d (keyframe video): no frames fit (start=%d, available=%d)",
+                condition_index,
+                pixel_frame_index,
+                available,
+            )
+            return None
+
+        # Align to VAE temporal grid: 8n+1
+        aligned_frames = (math.ceil((use_frames - 1) / vae_temporal_ratio)) * vae_temporal_ratio + 1
+        if aligned_frames <= 0:
+            aligned_frames = 1
+
+        video_clip = video_frames[:use_frames]
+        if aligned_frames > use_frames:
+            import numpy as np
+
+            pad_count = aligned_frames - use_frames
+            last_frame = video_clip[-1:]
+            video_clip = np.concatenate(
+                [video_clip] + [last_frame] * pad_count,
+                axis=0,
+            )
+
+        # Convert to tensor: [1, C, F, H, W] float32 in [-1, 1]
+        video_tensor = torch.from_numpy(video_clip).float() / 255.0
+        video_tensor = video_tensor * 2.0 - 1.0
+        video_tensor = video_tensor.permute(0, 3, 1, 2)
+        video_tensor = torch.nn.functional.interpolate(
+            video_tensor, size=(height, width), mode="bilinear", align_corners=False
+        )
+        video_tensor = video_tensor.permute(1, 0, 2, 3).unsqueeze(0)
+
+        # VAE encode
+        with mm.use_components("vae", device=device, strategy_override="model_offload"):
+            video_tensor = video_tensor.to(device=device, dtype=vae.dtype)
+            encoded = vae.encode(video_tensor).latent_dist.mode()
+
+        if latents_mean is not None and latents_std is not None:
+            encoded = normalize_latents(encoded.float(), latents_mean, latents_std)
+
+        encoded = encoded.cpu()
+
+        # Pack 5D → 3D
+        packed_tokens = pack_latents(encoded, patch_size=1, patch_size_t=1)
+
+        # Resolve latent start position
+        latent_start = (pixel_frame_index - 1) // vae_temporal_ratio
+        latent_start = max(0, min(latent_start, latent_num_frames - 1))
+
+        cond_latent_frames = encoded.shape[2]
+
+        # Generate position embeddings with frame_idx offset
+        positions = get_pixel_coords(
+            latent_height=latent_height,
+            latent_width=latent_width,
+            latent_num_frames=cond_latent_frames,
+            frame_idx=latent_start,
+            fps=frame_rate,
+            vae_spatial_scale=vae_spatial_ratio,
+            vae_temporal_scale=vae_temporal_ratio,
+        )
+
+        num_tokens = packed_tokens.shape[1]
+
+        logger.info(
+            "Condition %d (keyframe video): %d pixel frames → %d latent frames, %d tokens, strength=%.2f",
+            condition_index,
+            aligned_frames,
+            cond_latent_frames,
+            num_tokens,
+            strength,
+        )
+
+        return packed_tokens, positions, num_tokens

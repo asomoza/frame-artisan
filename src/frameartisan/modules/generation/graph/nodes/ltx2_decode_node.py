@@ -140,8 +140,14 @@ class LTX2DecodeNode(Node):
             audio_cond_mask = self.audio_conditioning_mask
             if clean_audio is not None and audio_cond_mask is None:
                 audio_to_decode = clean_audio
+                logger.debug("Audio decode: using clean_audio_latents (full conditioning)")
             else:
                 audio_to_decode = audio_latents
+                logger.debug(
+                    "Audio decode: using denoised audio_latents (clean=%s, mask=%s)",
+                    clean_audio is not None,
+                    audio_cond_mask.shape if audio_cond_mask is not None else None,
+                )
 
             audio_to_decode = denormalize_audio_latents(
                 audio_to_decode,

@@ -337,6 +337,8 @@ class TestLTX2LatentsNodeMetadata:
             "clean_audio_latents",
             "audio_conditioning_mask",
             "base_num_tokens",
+            "keyframe_group_sizes",
+            "keyframe_attention_scales",
         }
         assert set(LTX2LatentsNode.OUTPUTS) == expected
 

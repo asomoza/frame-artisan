@@ -56,6 +56,8 @@ class NodeGraphThread(QThread):
         self.save_source_video: bool = False
         self.auto_save_videos: bool = True
         self.preview_decode: bool = False
+        self.preview_time_upscale: bool = False
+        self.preview_space_upscale: bool = True
         self.tiny_vae_path: str | None = None
         self._job_json_graph: str | None = None
         self._active_graph: FrameArtisanNodeGraph | None = None
@@ -147,9 +149,12 @@ class NodeGraphThread(QThread):
 
         from frameartisan.modules.generation.graph.nodes.taehv import TAEHV
 
+        decoder_time_upscale = None if self.preview_time_upscale else (False, False)
+        decoder_space_upscale = (True, True, True) if self.preview_space_upscale else (False, False, False)
         self._tiny_vae = TAEHV(
             checkpoint_path=self.tiny_vae_path,
-            decoder_time_upscale=(False, False),
+            decoder_time_upscale=decoder_time_upscale,
+            decoder_space_upscale=decoder_space_upscale,
         ).to(
             device=self.device, dtype=torch.float16
         )

@@ -32,6 +32,11 @@ class LTX2LatentsNode(Node):
         "concat_latents",
         "concat_positions",
         "concat_conditioning_mask",
+        "keyframe_latents",
+        "keyframe_positions",
+        "keyframe_strengths",
+        "keyframe_group_sizes",
+        "keyframe_attention_scales",
     ]
     OUTPUTS: ClassVar[list[str]] = [
         "video_latents",
@@ -47,9 +52,25 @@ class LTX2LatentsNode(Node):
         "clean_audio_latents",
         "audio_conditioning_mask",
         "base_num_tokens",
+        "keyframe_group_sizes",
+        "keyframe_attention_scales",
     ]
 
     SERIALIZE_INCLUDE: ClassVar[set[str]] = set()
+
+    @staticmethod
+    def _build_keyframe_strength_mask(
+        strengths: list[float],
+        group_sizes: list[int],
+        device,
+    ):
+        """Build a [1, M, 1] mask with per-token strength values."""
+        import torch
+
+        parts = []
+        for strength, size in zip(strengths, group_sizes):
+            parts.append(torch.full((1, size, 1), strength, device=device, dtype=torch.float32))
+        return torch.cat(parts, dim=1)
 
     def __call__(self):
         import torch
@@ -168,6 +189,42 @@ class LTX2LatentsNode(Node):
                 )
             packed_clean_latents = torch.cat([packed_clean_latents, concat_lat], dim=1)
 
+        # --- Keyframe conditioning (original VideoConditionByKeyframeIndex) ---
+        keyframe_latents_input = self.keyframe_latents
+        keyframe_positions_input = self.keyframe_positions
+        keyframe_strengths_input = self.keyframe_strengths
+        keyframe_group_sizes = self.keyframe_group_sizes
+
+        if keyframe_latents_input is not None:
+            if base_num_tokens is None:
+                base_num_tokens = video_latents.shape[1]
+
+            kf_lat = keyframe_latents_input.to(device=device, dtype=video_latents.dtype)
+
+            # Blend keyframe tokens with noise based on per-group strength.
+            # strength=1.0 → pure clean; strength=0.0 → pure noise.
+            kf_noise = randn_tensor(kf_lat.shape, generator=generator, device=device, dtype=torch.float32)
+            kf_mask = self._build_keyframe_strength_mask(
+                keyframe_strengths_input, keyframe_group_sizes, device
+            )  # [1, M, 1]
+            kf_initial = kf_lat * kf_mask + kf_noise * (1 - kf_mask)
+            video_latents = torch.cat([video_latents, kf_initial], dim=1)
+
+            # Extend conditioning_mask: strength per token
+            kf_cond_mask = kf_mask.squeeze(-1)  # [1, M]
+            if conditioning_mask is None:
+                conditioning_mask = torch.zeros(
+                    1, base_num_tokens, device=device, dtype=torch.float32
+                )
+            conditioning_mask = torch.cat([conditioning_mask, kf_cond_mask], dim=1)
+
+            # Extend clean_latents with keyframe tokens (clean reference for x0 blending)
+            if packed_clean_latents is None:
+                packed_clean_latents = torch.zeros(
+                    1, base_num_tokens, kf_lat.shape[-1], device=device, dtype=video_latents.dtype
+                )
+            packed_clean_latents = torch.cat([packed_clean_latents, kf_lat], dim=1)
+
         # Audio latent dimensions
         duration_s = num_frames / frame_rate
         audio_latents_per_second = audio_sample_rate / audio_hop_length / float(audio_temporal_ratio)
@@ -213,6 +270,12 @@ class LTX2LatentsNode(Node):
             concat_pos_4d = concat_pos.unsqueeze(-1).expand(-1, -1, -1, video_coords.shape[-1])
             video_coords = torch.cat([video_coords, concat_pos_4d], dim=2)
 
+        # Extend video_coords with keyframe position embeddings
+        if keyframe_positions_input is not None:
+            kf_pos = keyframe_positions_input.to(device=device, dtype=video_coords.dtype)
+            kf_pos_4d = kf_pos.unsqueeze(-1).expand(-1, -1, -1, video_coords.shape[-1])
+            video_coords = torch.cat([video_coords, kf_pos_4d], dim=2)
+
         audio_coords = transformer.audio_rope.prepare_audio_coords(
             audio_latents.shape[0],
             audio_num_frames,
@@ -220,12 +283,13 @@ class LTX2LatentsNode(Node):
         )
 
         logger.info(
-            "Latents prepared: video %s, audio %s, coords video %s audio %s, base_tokens=%s",
+            "Latents prepared: video %s, audio %s, coords video %s audio %s, base_tokens=%s, keyframe_groups=%s",
             video_latents.shape,
             audio_latents.shape,
             video_coords.shape,
             audio_coords.shape,
             base_num_tokens,
+            keyframe_group_sizes,
         )
 
         self.values = {
@@ -242,5 +306,7 @@ class LTX2LatentsNode(Node):
             "clean_audio_latents": clean_audio_latents,
             "audio_conditioning_mask": audio_conditioning_mask,
             "base_num_tokens": base_num_tokens,
+            "keyframe_group_sizes": keyframe_group_sizes,
+            "keyframe_attention_scales": self.keyframe_attention_scales,
         }
         return self.values

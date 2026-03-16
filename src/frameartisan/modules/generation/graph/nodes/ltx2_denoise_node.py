@@ -54,6 +54,8 @@ class LTX2DenoiseNode(Node):
         "modality_scale",
         "guidance_skip_step",
         "base_num_tokens",
+        "keyframe_group_sizes",
+        "keyframe_attention_scales",
     ]
     OUTPUTS: ClassVar[list[str]] = ["video_latents", "audio_latents"]
 
@@ -235,6 +237,10 @@ class LTX2DenoiseNode(Node):
             if audio_conditioning_mask is not None:
                 audio_conditioning_mask = torch.cat([audio_conditioning_mask, audio_conditioning_mask])
 
+        # --- Keyframe self-attention mask ---
+        keyframe_group_sizes = self.keyframe_group_sizes
+        keyframe_hooks: list[tuple] | None = None
+
         logger.info(
             "LTX2 denoising: %d steps, guidance_scale=%.1f, seq_len=%d",
             len(timesteps),
@@ -249,6 +255,12 @@ class LTX2DenoiseNode(Node):
 
         try:
             with mm.use_components(transformer_component_name, device=device):
+                # Install keyframe attention mask after transformer is on device
+                if keyframe_group_sizes:
+                    keyframe_hooks = self._install_keyframe_attention(
+                        transformer, video_latents, keyframe_group_sizes,
+                        self.keyframe_attention_scales, do_cfg, device,
+                    )
                 for i, t in enumerate(timesteps):
                     if i == 0 and self.use_torch_compile and self.status_callback is not None:
                         self.status_callback("Compiling transformer (this may take a while)...")
@@ -393,6 +405,7 @@ class LTX2DenoiseNode(Node):
 
         except _AbortedError:
             self.abort = True
+            self._cleanup_keyframe_hooks(keyframe_hooks)
             video_latents = self._strip_concat_tokens(video_latents)
             self.values = {
                 "video_latents": video_latents,
@@ -400,8 +413,10 @@ class LTX2DenoiseNode(Node):
             }
             return self.values
         except Exception as e:
+            self._cleanup_keyframe_hooks(keyframe_hooks)
             raise NodeError(f"LTX2 denoising failed: {e}", self.__class__.__name__) from e
 
+        self._cleanup_keyframe_hooks(keyframe_hooks)
         video_latents = self._strip_concat_tokens(video_latents)
         self.values = {
             "video_latents": video_latents,
@@ -410,11 +425,67 @@ class LTX2DenoiseNode(Node):
         return self.values
 
     def _strip_concat_tokens(self, video_latents):
-        """Remove appended concat tokens if base_num_tokens is set."""
+        """Remove appended concat/keyframe tokens if base_num_tokens is set."""
         base_num_tokens = self.base_num_tokens
         if base_num_tokens is not None:
             video_latents = video_latents[:, : int(base_num_tokens), :]
         return video_latents
+
+    @staticmethod
+    def _install_keyframe_attention(
+        transformer, video_latents, keyframe_group_sizes, keyframe_attention_scales, do_cfg, device
+    ):
+        """Build and install the keyframe self-attention mask on the transformer."""
+        import torch
+
+        from frameartisan.modules.generation.graph.nodes.ltx2_keyframe_attention import (
+            install_keyframe_mask,
+        )
+        from frameartisan.modules.generation.graph.nodes.ltx2_utils import (
+            build_keyframe_attention_mask,
+        )
+
+        total_tokens = video_latents.shape[1]
+        num_keyframe_tokens = sum(keyframe_group_sizes)
+        num_base_tokens = total_tokens - num_keyframe_tokens
+
+        # Use the transformer's compute dtype so the mask matches query dtype in SDPA
+        model_dtype = next(transformer.parameters()).dtype
+
+        mask = build_keyframe_attention_mask(
+            num_base_tokens=num_base_tokens,
+            keyframe_group_sizes=keyframe_group_sizes,
+            attention_scales=keyframe_attention_scales,
+            dtype=model_dtype,
+            device=device,
+        )
+        if mask is None:
+            return None
+
+        # Expand for CFG batch if needed
+        batch_size = 2 if do_cfg else 1
+        if batch_size > 1:
+            mask = mask.expand(batch_size, -1, -1).contiguous()
+
+        logger.info(
+            "Keyframe attention mask installed: %d base tokens, %d keyframe tokens (%d groups), mask shape %s",
+            num_base_tokens,
+            num_keyframe_tokens,
+            len(keyframe_group_sizes),
+            mask.shape,
+        )
+
+        return install_keyframe_mask(transformer, mask)
+
+    @staticmethod
+    def _cleanup_keyframe_hooks(hooks):
+        """Remove keyframe attention mask hooks if installed."""
+        if hooks is not None:
+            from frameartisan.modules.generation.graph.nodes.ltx2_keyframe_attention import (
+                remove_keyframe_mask,
+            )
+
+            remove_keyframe_mask(hooks)
 
     def _run_advanced_guidance_loop(
         self,
@@ -506,6 +577,10 @@ class LTX2DenoiseNode(Node):
         last_noise_pred_video = None
         last_noise_pred_audio = None
 
+        # Keyframe attention mask for advanced guidance
+        keyframe_group_sizes = self.keyframe_group_sizes
+        keyframe_hooks: list[tuple] | None = None
+
         def _transformer_forward(v_input, a_input, p_embeds, a_p_embeds, attn_mask, video_ts, audio_ts_kwarg):
             with transformer.cache_context("cond_uncond"):
                 pred_v, pred_a = transformer(
@@ -530,6 +605,11 @@ class LTX2DenoiseNode(Node):
 
         try:
             with mm.use_components(transformer_component_name, device=device):
+                # Install keyframe attention mask (batch_size=1 for advanced guidance)
+                if keyframe_group_sizes:
+                    keyframe_hooks = self._install_keyframe_attention(
+                        transformer, video_latents, keyframe_group_sizes, False, device
+                    )
                 for i, t in enumerate(timesteps):
                     if i == 0 and self.use_torch_compile and self.status_callback is not None:
                         self.status_callback("Compiling transformer (this may take a while)...")
@@ -704,6 +784,7 @@ class LTX2DenoiseNode(Node):
 
         except _AbortedError:
             self.abort = True
+            self._cleanup_keyframe_hooks(keyframe_hooks)
             video_latents = self._strip_concat_tokens(video_latents)
             self.values = {
                 "video_latents": video_latents,
@@ -711,8 +792,10 @@ class LTX2DenoiseNode(Node):
             }
             return
         except Exception as e:
+            self._cleanup_keyframe_hooks(keyframe_hooks)
             raise NodeError(f"LTX2 advanced guidance denoising failed: {e}", self.__class__.__name__) from e
 
+        self._cleanup_keyframe_hooks(keyframe_hooks)
         video_latents = self._strip_concat_tokens(video_latents)
         self.values = {
             "video_latents": video_latents,

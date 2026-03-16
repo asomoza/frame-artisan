@@ -116,6 +116,24 @@ class VideoConditioningPanel(BasePanel):
         strength_layout.addWidget(self.strength_slider)
         main_layout.addLayout(strength_layout)
 
+        # Attention slider
+        attention_layout = QHBoxLayout()
+        attention_layout.addWidget(QLabel("Attention:"))
+        self.attention_slider = QLabeledDoubleSlider()
+        self.attention_slider.setRange(0.0, 1.0)
+        self.attention_slider.setSingleStep(0.05)
+        self.attention_slider.setValue(1.0)
+        self.attention_slider.setOrientation(Qt.Orientation.Horizontal)
+        self.attention_slider.setToolTip(
+            "Controls how strongly the model attends to this condition.\n"
+            "Only affects non-first-frame conditions (keyframes).\n"
+            "1.0 = full attention, 0.0 = ignored"
+        )
+        self.attention_slider.valueChanged.connect(self._on_settings_changed)
+        self.attention_slider.setEnabled(False)
+        attention_layout.addWidget(self.attention_slider)
+        main_layout.addLayout(attention_layout)
+
         # Source frame range slider
         source_range_layout = QHBoxLayout()
         source_range_layout.addWidget(QLabel("Source Frames:"))
@@ -204,6 +222,7 @@ class VideoConditioningPanel(BasePanel):
                 "video_path": path,
                 "pixel_frame_index": self.pixel_frame_index,
                 "strength": self.strength_slider.value(),
+                "attention_scale": self.attention_slider.value(),
                 "mode": self.video_mode,
                 "source_frame_start": sf_start,
                 "source_frame_end": sf_end,
@@ -264,6 +283,7 @@ class VideoConditioningPanel(BasePanel):
         self.frame_slider.setEnabled(True)
         self.last_frame_btn.setEnabled(True)
         self.strength_slider.setEnabled(True)
+        self.attention_slider.setEnabled(True)
         self.source_range_slider.setEnabled(self._video_frame_count > 1)
         self.mode_combo.setEnabled(True)
         self.remove_button.setEnabled(True)
@@ -335,18 +355,41 @@ class VideoConditioningPanel(BasePanel):
             logger.exception("Failed to extract audio from video")
             return False
 
+    def _video_audio_trim(self) -> tuple[float | None, float | None]:
+        """Compute audio trim times (seconds) matching the selected source frame range."""
+        if self._video_fps <= 0:
+            return None, None
+        sf_start, sf_end = self.source_frame_range
+        trim_start = (sf_start - 1) / self._video_fps
+        trim_end = sf_end / self._video_fps
+        return trim_start, trim_end
+
     def _publish_video_audio(self) -> None:
         if self._video_path is None:
             return
         output_path = os.path.join(self.directories.temp_path, "video_audio.wav")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         if self._extract_audio(self._video_path, output_path):
+            file_size = os.path.getsize(output_path)
+            trim_start, trim_end = self._video_audio_trim()
+            logger.debug(
+                "Video audio extracted: %s → %s (%d bytes), trim=%.2f-%.2fs",
+                self._video_path, output_path, file_size,
+                trim_start or 0, trim_end or 0,
+            )
             self._using_video_audio = True
             self.event_bus.publish(
                 "audio_condition",
-                {"action": "add", "audio_path": output_path, "from_video": True},
+                {
+                    "action": "add",
+                    "audio_path": output_path,
+                    "from_video": True,
+                    "trim_start_s": trim_start,
+                    "trim_end_s": trim_end,
+                },
             )
         else:
+            logger.warning("Video audio extraction failed for %s", self._video_path)
             self._using_video_audio = False
             blocker = QSignalBlocker(self.use_audio_checkbox)
             try:
@@ -415,11 +458,23 @@ class VideoConditioningPanel(BasePanel):
                         "action": "update_settings",
                         "pixel_frame_index": self.pixel_frame_index,
                         "strength": self.strength_slider.value(),
+                        "attention_scale": self.attention_slider.value(),
                         "mode": self.video_mode,
                         "source_frame_start": sf_start,
                         "source_frame_end": sf_end,
                     },
                 )
+                # Sync audio trim to match source frame range
+                if self._using_video_audio:
+                    trim_start, trim_end = self._video_audio_trim()
+                    self.event_bus.publish(
+                        "audio_condition",
+                        {
+                            "action": "update_trim",
+                            "trim_start_s": trim_start,
+                            "trim_end_s": trim_end,
+                        },
+                    )
         finally:
             self._publishing = False
 
@@ -440,6 +495,7 @@ class VideoConditioningPanel(BasePanel):
         self.frame_slider.setEnabled(False)
         self.last_frame_btn.setEnabled(False)
         self.strength_slider.setEnabled(False)
+        self.attention_slider.setEnabled(False)
         self.source_range_slider.setEnabled(False)
         self.mode_combo.setEnabled(False)
         self.remove_button.setEnabled(False)
