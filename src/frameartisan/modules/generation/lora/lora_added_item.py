@@ -24,6 +24,13 @@ class LoraAddedItem(QFrame):
         granular_transformer_weights: dict | None = None,
         is_slider: bool = False,
         apply_to_second_stage: bool = False,
+        spatial_mask_enabled: bool = False,
+        spatial_mask_path: str = "",
+        temporal_mask_enabled: bool = False,
+        temporal_start_frame: int = 0,
+        temporal_end_frame: int = -1,
+        temporal_fade_in_frames: int = 0,
+        temporal_fade_out_frames: int = 0,
     ):
         super().__init__()
 
@@ -39,6 +46,13 @@ class LoraAddedItem(QFrame):
         self.granular_transformer_weights = granular_transformer_weights or {}
         self.is_slider = is_slider
         self.apply_to_second_stage = apply_to_second_stage
+        self.spatial_mask_enabled = spatial_mask_enabled
+        self.spatial_mask_path = spatial_mask_path
+        self.temporal_mask_enabled = temporal_mask_enabled
+        self.temporal_start_frame = temporal_start_frame
+        self.temporal_end_frame = temporal_end_frame
+        self.temporal_fade_in_frames = temporal_fade_in_frames
+        self.temporal_fade_out_frames = temporal_fade_out_frames
 
         top_layout = QHBoxLayout()
         top_layout.setContentsMargins(0, 0, 0, 0)
@@ -116,6 +130,13 @@ class LoraAddedItem(QFrame):
         self.is_slider = config.get("is_slider", self.is_slider)
         self.apply_to_second_stage = config.get("apply_to_second_stage", self.apply_to_second_stage)
         self.second_stage_checkbox.setChecked(self.apply_to_second_stage)
+        self.spatial_mask_enabled = config.get("spatial_mask_enabled", self.spatial_mask_enabled)
+        self.spatial_mask_path = config.get("spatial_mask_path", self.spatial_mask_path)
+        self.temporal_mask_enabled = config.get("temporal_mask_enabled", self.temporal_mask_enabled)
+        self.temporal_start_frame = config.get("temporal_start_frame", self.temporal_start_frame)
+        self.temporal_end_frame = config.get("temporal_end_frame", self.temporal_end_frame)
+        self.temporal_fade_in_frames = config.get("temporal_fade_in_frames", self.temporal_fade_in_frames)
+        self.temporal_fade_out_frames = config.get("temporal_fade_out_frames", self.temporal_fade_out_frames)
 
     def get_config(self) -> dict:
         return {
@@ -130,4 +151,11 @@ class LoraAddedItem(QFrame):
             "granular_transformer_weights": self.granular_transformer_weights,
             "is_slider": self.is_slider,
             "apply_to_second_stage": self.apply_to_second_stage,
+            "spatial_mask_enabled": self.spatial_mask_enabled,
+            "spatial_mask_path": self.spatial_mask_path,
+            "temporal_mask_enabled": self.temporal_mask_enabled,
+            "temporal_start_frame": self.temporal_start_frame,
+            "temporal_end_frame": self.temporal_end_frame,
+            "temporal_fade_in_frames": self.temporal_fade_in_frames,
+            "temporal_fade_out_frames": self.temporal_fade_out_frames,
         }

@@ -156,6 +156,7 @@ def create_default_ltx2_graph(
     # --- Connections: → denoise ---
     denoise_node.connect("transformer", lora_node, "transformer")
     denoise_node.connect("transformer_component_name", lora_node, "transformer_component_name")
+    denoise_node.connect("lora_masks", lora_node, "lora_masks")
     denoise_node.connect("scheduler_config", model_node, "scheduler_config")
     denoise_node.connect("prompt_embeds", prompt_encode_node, "prompt_embeds")
     denoise_node.connect("audio_prompt_embeds", prompt_encode_node, "audio_prompt_embeds")
@@ -357,6 +358,7 @@ def create_default_ltx2_graph(
     # --- 2nd pass connections: second_pass_denoise_node ---
     second_pass_denoise_node.connect("transformer", second_pass_lora_node, "transformer")
     second_pass_denoise_node.connect("transformer_component_name", second_pass_lora_node, "transformer_component_name")
+    second_pass_denoise_node.connect("lora_masks", second_pass_lora_node, "lora_masks")
     second_pass_denoise_node.connect("scheduler_config", second_pass_model_node, "scheduler_config")
     second_pass_denoise_node.connect("prompt_embeds", prompt_encode_node, "prompt_embeds")
     second_pass_denoise_node.connect("audio_prompt_embeds", prompt_encode_node, "audio_prompt_embeds")

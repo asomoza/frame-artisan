@@ -116,6 +116,9 @@ class NodeGraphThread(QThread):
             video_send.source_video_output_dir = (
                 str(self.directories.outputs_source_videos) if self.save_source_video else None
             )
+            video_send.lora_mask_output_dir = (
+                str(self.directories.outputs_lora_masks) if self.save_source_images else None
+            )
             if self.node_graph is not None:
                 staged_vs = self.node_graph.get_node_by_name("video_send")
                 if staged_vs is not None:

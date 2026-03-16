@@ -85,6 +85,11 @@ class FrameArtisanApplication(QApplication):
             outputs_source_audio = os.path.join(os.path.dirname(data_path), "outputs", "source_audio")
             os.makedirs(outputs_source_audio, exist_ok=True)
             settings.setValue("outputs_source_audio", outputs_source_audio)
+        outputs_lora_masks = settings.value("outputs_lora_masks", None, type=str)
+        if not outputs_lora_masks and data_path:
+            outputs_lora_masks = os.path.join(os.path.dirname(data_path), "outputs", "lora_masks")
+            os.makedirs(outputs_lora_masks, exist_ok=True)
+            settings.setValue("outputs_lora_masks", outputs_lora_masks)
         cache_path = settings.value("cache_path", None, type=str)
         if not cache_path and data_path:
             # Auto-set cache_path for existing installations that predate this field.
@@ -108,6 +113,7 @@ class FrameArtisanApplication(QApplication):
             outputs_source_images=outputs_source_images,
             outputs_source_videos=outputs_source_videos,
             outputs_source_audio=outputs_source_audio,
+            outputs_lora_masks=outputs_lora_masks,
             cache_path=cache_path,
             temp_path=self.temp_path,
         )

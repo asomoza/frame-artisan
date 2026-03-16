@@ -135,6 +135,7 @@ class LTX2VideoSendNode(Node):
         self.source_image_output_dir: str | None = None
         self.source_audio_output_dir: str | None = None
         self.source_video_output_dir: str | None = None
+        self.lora_mask_output_dir: str | None = None
 
     def __call__(self):
         video = self.video
@@ -162,6 +163,7 @@ class LTX2VideoSendNode(Node):
                 source_image_dir=self.source_image_output_dir,
                 source_audio_dir=self.source_audio_output_dir,
                 source_video_dir=self.source_video_output_dir,
+                lora_mask_dir=self.lora_mask_output_dir,
             )
 
         try:

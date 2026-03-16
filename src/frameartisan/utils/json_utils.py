@@ -318,6 +318,7 @@ def persist_source_paths_in_graph(
     source_image_dir: str | None = None,
     source_audio_dir: str | None = None,
     source_video_dir: str | None = None,
+    lora_mask_dir: str | None = None,
 ) -> str:
     """Copy source files to permanent directories and rewrite paths in graph JSON.
 
@@ -382,6 +383,22 @@ def persist_source_paths_in_graph(
             if result is not None:
                 state["path"] = result
                 updated = True
+
+        # --- LoRA masks (LTX2LoraNode with spatial_mask_path in lora_configs) ---
+        elif cls_name == "LTX2LoraNode" and lora_mask_dir:
+            lora_configs = state.get("lora_configs")
+            if isinstance(lora_configs, list):
+                for cfg in lora_configs:
+                    if not isinstance(cfg, dict):
+                        continue
+                    mask_path = cfg.get("spatial_mask_path")
+                    if mask_path:
+                        lora_name = cfg.get("name", cfg.get("hash", "lora"))
+                        kind = f"lora_mask_{lora_name}"
+                        result = _persist_file(db, mask_path, lora_mask_dir, kind=kind)
+                        if result is not None:
+                            cfg["spatial_mask_path"] = result
+                            updated = True
 
     if not updated:
         return json_graph

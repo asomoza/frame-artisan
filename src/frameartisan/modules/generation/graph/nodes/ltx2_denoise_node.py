@@ -56,6 +56,7 @@ class LTX2DenoiseNode(Node):
         "base_num_tokens",
         "keyframe_group_sizes",
         "keyframe_attention_scales",
+        "lora_masks",
     ]
     OUTPUTS: ClassVar[list[str]] = ["video_latents", "audio_latents"]
 
@@ -253,6 +254,8 @@ class LTX2DenoiseNode(Node):
         if self.on_start_callback is not None:
             self.on_start_callback(len(timesteps))
 
+        lora_masks_applied = False
+
         try:
             with mm.use_components(transformer_component_name, device=device):
                 # Install keyframe attention mask after transformer is on device
@@ -260,6 +263,12 @@ class LTX2DenoiseNode(Node):
                     keyframe_hooks = self._install_keyframe_attention(
                         transformer, video_latents, keyframe_group_sizes,
                         self.keyframe_attention_scales, do_cfg, device,
+                    )
+                # Install LoRA spatial/temporal masks
+                if self.lora_masks:
+                    lora_masks_applied = self._install_lora_masks(
+                        transformer, self.lora_masks,
+                        latent_num_frames, latent_height, latent_width, device,
                     )
                 for i, t in enumerate(timesteps):
                     if i == 0 and self.use_torch_compile and self.status_callback is not None:
@@ -406,6 +415,8 @@ class LTX2DenoiseNode(Node):
         except _AbortedError:
             self.abort = True
             self._cleanup_keyframe_hooks(keyframe_hooks)
+            if lora_masks_applied:
+                self._cleanup_lora_masks()
             video_latents = self._strip_concat_tokens(video_latents)
             self.values = {
                 "video_latents": video_latents,
@@ -414,9 +425,13 @@ class LTX2DenoiseNode(Node):
             return self.values
         except Exception as e:
             self._cleanup_keyframe_hooks(keyframe_hooks)
+            if lora_masks_applied:
+                self._cleanup_lora_masks()
             raise NodeError(f"LTX2 denoising failed: {e}", self.__class__.__name__) from e
 
         self._cleanup_keyframe_hooks(keyframe_hooks)
+        if lora_masks_applied:
+            self._cleanup_lora_masks()
         video_latents = self._strip_concat_tokens(video_latents)
         self.values = {
             "video_latents": video_latents,
@@ -486,6 +501,50 @@ class LTX2DenoiseNode(Node):
             )
 
             remove_keyframe_mask(hooks)
+
+    @staticmethod
+    def _install_lora_masks(
+        transformer, lora_masks, latent_num_frames, latent_height, latent_width, device
+    ) -> bool:
+        """Build combined masks and patch LoRA layers for each adapter."""
+        from frameartisan.modules.generation.graph.nodes.lora_mask import (
+            build_combined_mask,
+            build_temporal_weights,
+            patch_lora_adapter_with_mask,
+        )
+
+        latent_dims = (latent_num_frames, latent_height, latent_width)
+        any_patched = False
+
+        for adapter_name, spatial_mask, temporal_config in lora_masks:
+            temporal_weights = None
+            if temporal_config:
+                temporal_weights = build_temporal_weights(
+                    latent_num_frames,
+                    temporal_config["start_frame"],
+                    temporal_config["end_frame"],
+                    temporal_config.get("fade_in_frames", 0),
+                    temporal_config.get("fade_out_frames", 0),
+                )
+
+            combined_mask = build_combined_mask(
+                spatial_mask, temporal_weights,
+                latent_num_frames, latent_height, latent_width,
+            )
+            if combined_mask is not None:
+                combined_mask = combined_mask.to(device=device)
+                count = patch_lora_adapter_with_mask(transformer, adapter_name, combined_mask, latent_dims)
+                if count > 0:
+                    any_patched = True
+
+        return any_patched
+
+    @staticmethod
+    def _cleanup_lora_masks():
+        """Remove all LoRA mask patches."""
+        from frameartisan.modules.generation.graph.nodes.lora_mask import unpatch_all_lora_layers
+
+        unpatch_all_lora_layers()
 
     def _run_advanced_guidance_loop(
         self,
@@ -603,12 +662,20 @@ class LTX2DenoiseNode(Node):
                 )
             return pred_v.float(), pred_a.float()
 
+        lora_masks_applied = False
+
         try:
             with mm.use_components(transformer_component_name, device=device):
                 # Install keyframe attention mask (batch_size=1 for advanced guidance)
                 if keyframe_group_sizes:
                     keyframe_hooks = self._install_keyframe_attention(
                         transformer, video_latents, keyframe_group_sizes, False, device
+                    )
+                # Install LoRA spatial/temporal masks
+                if self.lora_masks:
+                    lora_masks_applied = self._install_lora_masks(
+                        transformer, self.lora_masks,
+                        latent_num_frames, latent_height, latent_width, device,
                     )
                 for i, t in enumerate(timesteps):
                     if i == 0 and self.use_torch_compile and self.status_callback is not None:
@@ -785,6 +852,8 @@ class LTX2DenoiseNode(Node):
         except _AbortedError:
             self.abort = True
             self._cleanup_keyframe_hooks(keyframe_hooks)
+            if lora_masks_applied:
+                self._cleanup_lora_masks()
             video_latents = self._strip_concat_tokens(video_latents)
             self.values = {
                 "video_latents": video_latents,
@@ -793,9 +862,13 @@ class LTX2DenoiseNode(Node):
             return
         except Exception as e:
             self._cleanup_keyframe_hooks(keyframe_hooks)
+            if lora_masks_applied:
+                self._cleanup_lora_masks()
             raise NodeError(f"LTX2 advanced guidance denoising failed: {e}", self.__class__.__name__) from e
 
         self._cleanup_keyframe_hooks(keyframe_hooks)
+        if lora_masks_applied:
+            self._cleanup_lora_masks()
         video_latents = self._strip_concat_tokens(video_latents)
         self.values = {
             "video_latents": video_latents,

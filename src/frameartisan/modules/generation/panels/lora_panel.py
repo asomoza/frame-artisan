@@ -48,6 +48,13 @@ class LoraPanel(BasePanel):
         granular_transformer_weights: dict | None = None,
         is_slider: bool = False,
         apply_to_second_stage: bool = False,
+        spatial_mask_enabled: bool = False,
+        spatial_mask_path: str = "",
+        temporal_mask_enabled: bool = False,
+        temporal_start_frame: int = 0,
+        temporal_end_frame: int = -1,
+        temporal_fade_in_frames: int = 0,
+        temporal_fade_out_frames: int = 0,
     ):
         item = LoraAddedItem(
             lora_id,
@@ -61,6 +68,13 @@ class LoraPanel(BasePanel):
             granular_transformer_weights=granular_transformer_weights,
             is_slider=is_slider,
             apply_to_second_stage=apply_to_second_stage,
+            spatial_mask_enabled=spatial_mask_enabled,
+            spatial_mask_path=spatial_mask_path,
+            temporal_mask_enabled=temporal_mask_enabled,
+            temporal_start_frame=temporal_start_frame,
+            temporal_end_frame=temporal_end_frame,
+            temporal_fade_in_frames=temporal_fade_in_frames,
+            temporal_fade_out_frames=temporal_fade_out_frames,
         )
         item.enabled_changed.connect(self._on_item_changed)
         item.remove_clicked.connect(self._on_item_remove)
@@ -121,6 +135,13 @@ class LoraPanel(BasePanel):
                 granular_transformer_weights=data.get("granular_transformer_weights"),
                 is_slider=data.get("is_slider", False),
                 apply_to_second_stage=data.get("apply_to_second_stage", False),
+                spatial_mask_enabled=data.get("spatial_mask_enabled", False),
+                spatial_mask_path=data.get("spatial_mask_path", ""),
+                temporal_mask_enabled=data.get("temporal_mask_enabled", False),
+                temporal_start_frame=data.get("temporal_start_frame", 0),
+                temporal_end_frame=data.get("temporal_end_frame", -1),
+                temporal_fade_in_frames=data.get("temporal_fade_in_frames", 0),
+                temporal_fade_out_frames=data.get("temporal_fade_out_frames", 0),
             )
             self._sync_to_graph()
         elif action == "remove":

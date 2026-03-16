@@ -11,5 +11,6 @@ class DirectoriesObject:
     outputs_source_images = attr.ib(type=str)
     outputs_source_videos = attr.ib(type=str)
     outputs_source_audio = attr.ib(type=str)
+    outputs_lora_masks = attr.ib(type=str)
     cache_path = attr.ib(type=str)
     temp_path = attr.ib(type=str)

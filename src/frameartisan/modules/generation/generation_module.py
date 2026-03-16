@@ -307,6 +307,9 @@ class GenerationModule(BaseModule):
                 "factory": lambda data: LoraAdvancedDialog(
                     f"lora_advanced_{data.get('id', '')}",
                     data.get("config", {}),
+                    temp_path=str(self.directories.temp_path),
+                    mask_width=self.gen_settings.video_width,
+                    mask_height=self.gen_settings.video_height,
                 ),
             },
             "source_image": {

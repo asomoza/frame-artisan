@@ -129,7 +129,7 @@ def _apply_strength_filtering(state_dict: dict, video_strength: float, audio_str
 
 class LTX2LoraNode(Node):
     PRIORITY = 1
-    OUTPUTS = ["transformer", "transformer_component_name", "reference_downscale_factor"]
+    OUTPUTS = ["transformer", "transformer_component_name", "reference_downscale_factor", "lora_masks"]
     REQUIRED_INPUTS: ClassVar[list] = ["transformer"]
     OPTIONAL_INPUTS: ClassVar[list] = ["transformer_component_name"]
 
@@ -211,6 +211,7 @@ class LTX2LoraNode(Node):
                 "transformer": transformer,
                 "transformer_component_name": transformer_component_name,
                 "reference_downscale_factor": 1,
+                "lora_masks": None,
             }
             return self.values
 
@@ -300,10 +301,14 @@ class LTX2LoraNode(Node):
                 ds = self._read_reference_downscale_factor(filepath)
                 max_downscale = max(max_downscale, ds)
 
+        # Collect per-adapter mask configs
+        lora_masks = self._collect_lora_masks(desired)
+
         self.values = {
             "transformer": transformer,
             "transformer_component_name": transformer_component_name,
             "reference_downscale_factor": max_downscale,
+            "lora_masks": lora_masks if lora_masks else None,
         }
         return self.values
 
@@ -311,3 +316,33 @@ class LTX2LoraNode(Node):
         if configs != self.lora_configs:
             self.lora_configs = configs
             self.set_updated()
+
+    @staticmethod
+    def _collect_lora_masks(desired: dict[str, dict]) -> list[tuple]:
+        """Collect mask data for adapters that have spatial or temporal masking enabled.
+
+        Returns:
+            List of (adapter_name, spatial_mask_tensor | None, temporal_config | None) tuples.
+        """
+        from frameartisan.modules.generation.graph.nodes.lora_mask import load_spatial_mask
+
+        masks = []
+        for adapter_name, cfg in desired.items():
+            spatial_mask = None
+            temporal_config = None
+
+            if cfg.get("spatial_mask_enabled") and cfg.get("spatial_mask_path"):
+                spatial_mask = load_spatial_mask(cfg["spatial_mask_path"])
+
+            if cfg.get("temporal_mask_enabled"):
+                temporal_config = {
+                    "start_frame": cfg.get("temporal_start_frame", 0),
+                    "end_frame": cfg.get("temporal_end_frame", -1),
+                    "fade_in_frames": cfg.get("temporal_fade_in_frames", 0),
+                    "fade_out_frames": cfg.get("temporal_fade_out_frames", 0),
+                }
+
+            if spatial_mask is not None or temporal_config is not None:
+                masks.append((adapter_name, spatial_mask, temporal_config))
+
+        return masks
