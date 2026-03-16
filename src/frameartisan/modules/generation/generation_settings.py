@@ -59,6 +59,8 @@ class GenerationSettings:
     ff_chunking: bool = False
     ff_num_chunks: int = 2
     preview_decode: bool = False
+    preview_time_upscale: bool = False
+    preview_space_upscale: bool = True
 
     video_codec: str = "libx264"
     video_crf: int = 23
@@ -182,6 +184,16 @@ class GenerationSettings:
                 settings.preview_decode,
             )
 
+            settings.preview_time_upscale = coerce_bool(
+                qsettings.value("preview_time_upscale", settings.preview_time_upscale),
+                settings.preview_time_upscale,
+            )
+
+            settings.preview_space_upscale = coerce_bool(
+                qsettings.value("preview_space_upscale", settings.preview_space_upscale),
+                settings.preview_space_upscale,
+            )
+
             settings.source_image_enabled = coerce_bool(
                 qsettings.value("source_image_enabled", settings.source_image_enabled),
                 settings.source_image_enabled,
@@ -291,6 +303,8 @@ class GenerationSettings:
             qsettings.setValue("ff_chunking", bool(self.ff_chunking))
             qsettings.setValue("ff_num_chunks", int(self.ff_num_chunks))
             qsettings.setValue("preview_decode", bool(self.preview_decode))
+            qsettings.setValue("preview_time_upscale", bool(self.preview_time_upscale))
+            qsettings.setValue("preview_space_upscale", bool(self.preview_space_upscale))
             qsettings.setValue("source_image_enabled", bool(self.source_image_enabled))
             qsettings.setValue("visual_conditions_enabled", bool(self.visual_conditions_enabled))
             qsettings.setValue("audio_conditioning_enabled", bool(self.audio_conditioning_enabled))

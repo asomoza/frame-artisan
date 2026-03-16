@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
 )
 from superqt import QLabeledDoubleSlider, QLabeledSlider
 
@@ -304,6 +305,34 @@ class GenerationPanel(BasePanel):
         self.preview_decode_checkbox.setChecked(bool(getattr(self.gen_settings, "preview_decode", False)))
         self.preview_decode_checkbox.toggled.connect(self.on_preview_decode_toggled)
         main_layout.addWidget(self.preview_decode_checkbox)
+
+        # Preview quality options (indented under Live Preview)
+        preview_options_layout = QHBoxLayout()
+        preview_options_layout.setContentsMargins(20, 0, 0, 0)
+        self.preview_time_upscale_checkbox = QCheckBox("Temporal Upscale")
+        self.preview_time_upscale_checkbox.setToolTip(
+            "Upscale frames temporally in the tiny VAE decoder.\n"
+            "Off = faster preview (fewer frames), On = full frame count."
+        )
+        self.preview_time_upscale_checkbox.setChecked(bool(getattr(self.gen_settings, "preview_time_upscale", False)))
+        self.preview_time_upscale_checkbox.toggled.connect(self.on_preview_time_upscale_toggled)
+        preview_options_layout.addWidget(self.preview_time_upscale_checkbox)
+
+        self.preview_space_upscale_checkbox = QCheckBox("Spatial Upscale")
+        self.preview_space_upscale_checkbox.setToolTip(
+            "Upscale resolution spatially in the tiny VAE decoder.\n"
+            "Off = faster preview (lower resolution), On = full resolution."
+        )
+        self.preview_space_upscale_checkbox.setChecked(bool(getattr(self.gen_settings, "preview_space_upscale", True)))
+        self.preview_space_upscale_checkbox.toggled.connect(self.on_preview_space_upscale_toggled)
+        preview_options_layout.addWidget(self.preview_space_upscale_checkbox)
+        preview_options_layout.addStretch()
+
+        self._preview_options_widget = QWidget()
+        self._preview_options_widget.setLayout(preview_options_layout)
+        main_layout.addWidget(self._preview_options_widget)
+        self._update_preview_options_visibility()
+
         self._update_preview_decode_availability()
 
         # --- 2nd pass (upsample) section ---
@@ -700,6 +729,17 @@ class GenerationPanel(BasePanel):
 
     def on_preview_decode_toggled(self, checked: bool):
         self.event_bus.publish("generation_change", {"attr": "preview_decode", "value": bool(checked)})
+        self._update_preview_options_visibility()
+
+    def on_preview_time_upscale_toggled(self, checked: bool):
+        self.event_bus.publish("generation_change", {"attr": "preview_time_upscale", "value": bool(checked)})
+
+    def on_preview_space_upscale_toggled(self, checked: bool):
+        self.event_bus.publish("generation_change", {"attr": "preview_space_upscale", "value": bool(checked)})
+
+    def _update_preview_options_visibility(self):
+        visible = self.preview_decode_checkbox.isChecked() and self.preview_decode_checkbox.isEnabled()
+        self._preview_options_widget.setVisible(visible)
 
     def _update_preview_decode_availability(self):
         """Enable the live preview checkbox only if the tiny VAE is downloaded."""
@@ -707,12 +747,14 @@ class GenerationPanel(BasePanel):
         if not models_dir:
             self.preview_decode_checkbox.setEnabled(False)
             self.preview_decode_checkbox.setChecked(False)
+            self._update_preview_options_visibility()
             return
         tiny_vae_path = os.path.join(models_dir, LTX2_TINY_VAE_DIR, LTX2_TINY_VAE_FILENAME)
         available = os.path.isfile(tiny_vae_path)
         self.preview_decode_checkbox.setEnabled(available)
         if not available:
             self.preview_decode_checkbox.setChecked(False)
+        self._update_preview_options_visibility()
 
     def _on_model_downloaded(self, data: dict) -> None:
         if "tiny_vae" in data.get("variants", []):
