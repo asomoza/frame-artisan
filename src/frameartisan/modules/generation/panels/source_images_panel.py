@@ -4,6 +4,7 @@ from PyQt6.QtCore import QSignalBlocker, Qt
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -87,6 +88,22 @@ class _ConditionEntry(QWidget):
         attention_layout.addWidget(self.attention_slider)
         layout.addLayout(attention_layout)
 
+        # Method selector
+        method_layout = QHBoxLayout()
+        method_layout.addWidget(QLabel("Method:"))
+        self.method_combo = QComboBox()
+        self.method_combo.addItem("Auto", "auto")
+        self.method_combo.addItem("Replace", "replace")
+        self.method_combo.addItem("Keyframe", "keyframe")
+        self.method_combo.setToolTip(
+            "Auto: frame 1 uses Replace, other frames use Keyframe.\n"
+            "Replace: force exact image at this frame (hard constraint).\n"
+            "Keyframe: append as attention reference (soft guidance)."
+        )
+        self.method_combo.currentIndexChanged.connect(self._on_settings_changed)
+        method_layout.addWidget(self.method_combo)
+        layout.addLayout(method_layout)
+
         # Buttons
         btn_layout = QHBoxLayout()
         edit_btn = QPushButton("Edit")
@@ -133,6 +150,7 @@ class _ConditionEntry(QWidget):
             "pixel_frame_index": self.pixel_frame_index,
             "strength": self.strength_slider.value(),
             "attention_scale": self.attention_slider.value(),
+            "method": self.method_combo.currentData() or "auto",
         }
 
     def _on_last_toggled(self, checked: bool) -> None:
@@ -158,6 +176,7 @@ class _ConditionEntry(QWidget):
                     "pixel_frame_index": self.pixel_frame_index,
                     "strength": self.strength_slider.value(),
                     "attention_scale": self.attention_slider.value(),
+                    "method": self.method_combo.currentData() or "auto",
                 },
             )
         finally:
@@ -259,6 +278,7 @@ class SourceImagesPanel(BasePanel):
         pixel_frame_index: int = 1,
         strength: float = 1.0,
         attention_scale: float = 1.0,
+        method: str = "auto",
     ) -> None:
         entry = _ConditionEntry(condition_id, self, self._total_frames)
         entry.set_thumb(thumb_path)
@@ -281,6 +301,14 @@ class SourceImagesPanel(BasePanel):
         blocker = QSignalBlocker(entry.attention_slider)
         try:
             entry.attention_slider.setValue(attention_scale)
+        finally:
+            del blocker
+
+        blocker = QSignalBlocker(entry.method_combo)
+        try:
+            idx = entry.method_combo.findData(method)
+            if idx >= 0:
+                entry.method_combo.setCurrentIndex(idx)
         finally:
             del blocker
 
@@ -324,7 +352,8 @@ class SourceImagesPanel(BasePanel):
             thumb_path = data.get("source_thumb_path", "")
             pixel_frame_index = data.get("pixel_frame_index", 1)
             strength = data.get("strength", 1.0)
-            self._add_condition_entry(condition_id, thumb_path, pixel_frame_index, strength)
+            method = data.get("method", "auto")
+            self._add_condition_entry(condition_id, thumb_path, pixel_frame_index, strength, method=method)
 
         elif action == "update":
             entry = self._entries.get(condition_id)

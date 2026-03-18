@@ -72,9 +72,11 @@ class VideoConditioningPanel(BasePanel):
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("Replace", "replace")
         self.mode_combo.addItem("Concat (IC-LoRA)", "concat")
+        self.mode_combo.addItem("Keyframe", "keyframe")
         self.mode_combo.setToolTip(
-            "Replace: overwrite latent tokens in-place (default).\n"
-            "Concat: append reference tokens (IC-LoRA style, for control conditioning)"
+            "Replace: overwrite latent tokens in-place (hard constraint).\n"
+            "Concat: append reference tokens (IC-LoRA style, for control conditioning).\n"
+            "Keyframe: append as attention reference (soft guidance)."
         )
         self.mode_combo.currentIndexChanged.connect(self._on_settings_changed)
         self.mode_combo.setEnabled(False)
