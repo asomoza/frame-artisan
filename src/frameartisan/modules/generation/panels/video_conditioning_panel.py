@@ -78,10 +78,49 @@ class VideoConditioningPanel(BasePanel):
             "Concat: append reference tokens (IC-LoRA style, for control conditioning).\n"
             "Keyframe: append as attention reference (soft guidance)."
         )
-        self.mode_combo.currentIndexChanged.connect(self._on_settings_changed)
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         self.mode_combo.setEnabled(False)
         mode_layout.addWidget(self.mode_combo)
         main_layout.addLayout(mode_layout)
+
+        # Keyframe downscale options (visible only in keyframe mode)
+        self._keyframe_options_frame = QVBoxLayout()
+        self._kf_downscale_label = QLabel("Keyframe Downsampling")
+        self._kf_downscale_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._keyframe_options_frame.addWidget(self._kf_downscale_label)
+        kf_spatial_layout = QHBoxLayout()
+        kf_spatial_layout.addWidget(QLabel("Spatial:"))
+        self.keyframe_spatial_combo = QComboBox()
+        for val, label in [(1, "1x (Full)"), (2, "2x"), (4, "4x")]:
+            self.keyframe_spatial_combo.addItem(label, val)
+        cur_spatial = int(getattr(self.gen_settings, "keyframe_spatial_downscale", 1))
+        for i in range(self.keyframe_spatial_combo.count()):
+            if self.keyframe_spatial_combo.itemData(i) == cur_spatial:
+                self.keyframe_spatial_combo.setCurrentIndex(i)
+                break
+        self.keyframe_spatial_combo.currentIndexChanged.connect(self._on_keyframe_ds_changed)
+        kf_spatial_layout.addWidget(self.keyframe_spatial_combo)
+
+        kf_temporal_layout = QHBoxLayout()
+        kf_temporal_layout.addWidget(QLabel("Temporal:"))
+        self.keyframe_temporal_combo = QComboBox()
+        for val, label in [(1, "All frames"), (2, "Every 2nd"), (4, "Every 4th"), (6, "Every 6th")]:
+            self.keyframe_temporal_combo.addItem(label, val)
+        cur_temporal = int(getattr(self.gen_settings, "keyframe_temporal_stride", 1))
+        for i in range(self.keyframe_temporal_combo.count()):
+            if self.keyframe_temporal_combo.itemData(i) == cur_temporal:
+                self.keyframe_temporal_combo.setCurrentIndex(i)
+                break
+        self.keyframe_temporal_combo.currentIndexChanged.connect(self._on_keyframe_ds_changed)
+        kf_temporal_layout.addWidget(self.keyframe_temporal_combo)
+
+        self._keyframe_options_frame.addLayout(kf_spatial_layout)
+        self._keyframe_options_frame.addLayout(kf_temporal_layout)
+        main_layout.addLayout(self._keyframe_options_frame)
+
+        self._kf_spatial_label = kf_spatial_layout.itemAt(0).widget()
+        self._kf_temporal_label = kf_temporal_layout.itemAt(0).widget()
+        self._update_keyframe_options_visibility()
 
         # Start frame slider
         frame_layout = QHBoxLayout()
@@ -182,6 +221,26 @@ class VideoConditioningPanel(BasePanel):
     @property
     def video_mode(self) -> str:
         return self.mode_combo.currentData() or "replace"
+
+    def _update_keyframe_options_visibility(self) -> None:
+        visible = self.mode_combo.currentData() == "keyframe"
+        self._kf_downscale_label.setVisible(visible)
+        self.keyframe_spatial_combo.setVisible(visible)
+        self.keyframe_temporal_combo.setVisible(visible)
+        self._kf_spatial_label.setVisible(visible)
+        self._kf_temporal_label.setVisible(visible)
+
+    def _on_mode_changed(self) -> None:
+        self._update_keyframe_options_visibility()
+        self._on_settings_changed()
+
+    def _on_keyframe_ds_changed(self) -> None:
+        spatial = self.keyframe_spatial_combo.currentData()
+        temporal = self.keyframe_temporal_combo.currentData()
+        if spatial is not None:
+            self.event_bus.publish("generation_change", {"attr": "keyframe_spatial_downscale", "value": int(spatial)})
+        if temporal is not None:
+            self.event_bus.publish("generation_change", {"attr": "keyframe_temporal_stride", "value": int(temporal)})
 
     def _on_enabled_changed(self, checked: bool) -> None:
         self.event_bus.publish("generation_change", {"attr": "video_conditioning_enabled", "value": checked})

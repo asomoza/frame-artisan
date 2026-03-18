@@ -664,6 +664,14 @@ class GenerationModule(BaseModule):
                     condition_encode.enabled = value or has_images
                     condition_encode.set_updated()
 
+        if attr in ("keyframe_spatial_downscale", "keyframe_temporal_stride"):
+            if self.node_graph is not None:
+                condition_encode = self.node_graph.get_node_by_name("condition_encode")
+                if condition_encode is not None:
+                    setattr(condition_encode, attr, int(value))
+                    condition_encode.set_updated()
+            return
+
         node_name = self._SETTINGS_TO_NODE.get(attr, attr)
 
         if self.node_graph is not None:

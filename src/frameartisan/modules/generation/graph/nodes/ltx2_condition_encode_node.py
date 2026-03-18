@@ -36,12 +36,14 @@ class LTX2ConditionEncodeNode(Node):
         "keyframe_group_sizes",
         "keyframe_attention_scales",
     ]
-    SERIALIZE_INCLUDE: ClassVar[set[str]] = {"conditions"}
+    SERIALIZE_INCLUDE: ClassVar[set[str]] = {"conditions", "keyframe_spatial_downscale", "keyframe_temporal_stride"}
 
     def __init__(self):
         super().__init__()
         # Each entry: {"type": "image"|"video", "pixel_frame_index": int, "strength": float}
         self.conditions: list[dict] = []
+        self.keyframe_spatial_downscale: int = 1
+        self.keyframe_temporal_stride: int = 1
 
     def update_conditions(self, conditions: list[dict]) -> None:
         self.conditions = conditions
@@ -230,6 +232,8 @@ class LTX2ConditionEncodeNode(Node):
                         latents_std,
                         frame_rate,
                         i,
+                        spatial_downscale=self.keyframe_spatial_downscale,
+                        temporal_stride=self.keyframe_temporal_stride,
                     )
                     if result is not None:
                         tokens, positions, num_tokens = result
@@ -282,6 +286,7 @@ class LTX2ConditionEncodeNode(Node):
                         latents_std,
                         frame_rate,
                         i,
+                        spatial_downscale=self.keyframe_spatial_downscale,
                     )
                     if result is not None:
                         tokens, positions, num_tokens = result
@@ -725,11 +730,12 @@ class LTX2ConditionEncodeNode(Node):
         latents_std,
         frame_rate: float,
         condition_index: int,
+        spatial_downscale: int = 1,
     ) -> tuple | None:
         """Encode a single-frame image as keyframe tokens (appended to sequence).
 
-        Follows the original LTX-2 ``VideoConditionByKeyframeIndex`` approach:
-        tokens are appended to the sequence and referenced via self-attention.
+        Args:
+            spatial_downscale: Spatial downscale factor (1=full, 2=half, 4=quarter).
 
         Returns ``(packed_tokens, positions, num_tokens)`` or ``None``.
         """
@@ -747,14 +753,20 @@ class LTX2ConditionEncodeNode(Node):
         latent_idx = (pixel_frame_index - 1) // vae_temporal_ratio
         latent_idx = max(0, min(latent_idx, latent_num_frames - 1))
 
+        # Spatial downscale
+        encode_height = height // spatial_downscale
+        encode_width = width // spatial_downscale
+        kf_latent_height = latent_height // spatial_downscale
+        kf_latent_width = latent_width // spatial_downscale
+
         # Preprocess image: numpy HWC uint8 → torch [1, C, H, W] float32 in [-1, 1]
         image_tensor = torch.from_numpy(image).float() / 255.0
         image_tensor = image_tensor * 2.0 - 1.0
         image_tensor = image_tensor.permute(2, 0, 1).unsqueeze(0)
 
-        # Resize to target dimensions
+        # Resize to downscaled dimensions
         image_tensor = torch.nn.functional.interpolate(
-            image_tensor, size=(height, width), mode="bilinear", align_corners=False
+            image_tensor, size=(encode_height, encode_width), mode="bilinear", align_corners=False
         )
 
         # Add temporal dimension: [1, C, 1, H, W]
@@ -774,26 +786,30 @@ class LTX2ConditionEncodeNode(Node):
         # Pack 5D → 3D: [1, num_tokens, features]
         packed_tokens = pack_latents(init_latents, patch_size=1, patch_size_t=1)
 
-        # Generate position embeddings with frame_idx offset
+        # Generate position embeddings at downscaled dims and scale back
         positions = get_pixel_coords(
-            latent_height=latent_height,
-            latent_width=latent_width,
+            latent_height=kf_latent_height,
+            latent_width=kf_latent_width,
             latent_num_frames=1,  # single frame
             frame_idx=latent_idx,
             fps=frame_rate,
             vae_spatial_scale=getattr(vae, "spatial_compression_ratio", 32),
             vae_temporal_scale=vae_temporal_ratio,
         )
+        if spatial_downscale > 1:
+            positions[:, 1, :] = positions[:, 1, :] * spatial_downscale
+            positions[:, 2, :] = positions[:, 2, :] * spatial_downscale
 
         num_tokens = packed_tokens.shape[1]
 
         logger.info(
-            "Condition %d (keyframe image): pixel_frame=%d → latent_idx=%d, %d tokens, strength=%.2f",
+            "Condition %d (keyframe image): pixel_frame=%d → latent_idx=%d, %d tokens, strength=%.2f, spatial_ds=%d",
             condition_index,
             pixel_frame_index,
             latent_idx,
             num_tokens,
             strength,
+            spatial_downscale,
         )
 
         return packed_tokens, positions, num_tokens
@@ -818,8 +834,14 @@ class LTX2ConditionEncodeNode(Node):
         latents_std,
         frame_rate: float,
         condition_index: int,
+        spatial_downscale: int = 1,
+        temporal_stride: int = 1,
     ) -> tuple | None:
         """Encode a video clip as keyframe tokens (appended to sequence).
+
+        Args:
+            spatial_downscale: Spatial downscale factor (1=full, 2=half, 4=quarter).
+            temporal_stride: Take every Nth frame (1=all, 2=every 2nd, 4=every 4th).
 
         Returns ``(packed_tokens, positions, num_tokens)`` or ``None``.
         """
@@ -851,28 +873,41 @@ class LTX2ConditionEncodeNode(Node):
             )
             return None
 
+        video_clip = video_frames[:use_frames]
+
+        # Temporal subsampling: take every Nth frame to reduce token count
+        if temporal_stride > 1:
+            video_clip = video_clip[::temporal_stride]
+
+        use_frames_after_stride = video_clip.shape[0]
+
         # Align to VAE temporal grid: 8n+1
-        aligned_frames = (math.ceil((use_frames - 1) / vae_temporal_ratio)) * vae_temporal_ratio + 1
+        aligned_frames = (math.ceil((use_frames_after_stride - 1) / vae_temporal_ratio)) * vae_temporal_ratio + 1
         if aligned_frames <= 0:
             aligned_frames = 1
 
-        video_clip = video_frames[:use_frames]
-        if aligned_frames > use_frames:
+        if aligned_frames > use_frames_after_stride:
             import numpy as np
 
-            pad_count = aligned_frames - use_frames
+            pad_count = aligned_frames - use_frames_after_stride
             last_frame = video_clip[-1:]
             video_clip = np.concatenate(
                 [video_clip] + [last_frame] * pad_count,
                 axis=0,
             )
 
+        # Spatial downscale for keyframe encoding
+        encode_height = height // spatial_downscale
+        encode_width = width // spatial_downscale
+        kf_latent_height = latent_height // spatial_downscale
+        kf_latent_width = latent_width // spatial_downscale
+
         # Convert to tensor: [1, C, F, H, W] float32 in [-1, 1]
         video_tensor = torch.from_numpy(video_clip).float() / 255.0
         video_tensor = video_tensor * 2.0 - 1.0
         video_tensor = video_tensor.permute(0, 3, 1, 2)
         video_tensor = torch.nn.functional.interpolate(
-            video_tensor, size=(height, width), mode="bilinear", align_corners=False
+            video_tensor, size=(encode_height, encode_width), mode="bilinear", align_corners=False
         )
         video_tensor = video_tensor.permute(1, 0, 2, 3).unsqueeze(0)
 
@@ -895,26 +930,32 @@ class LTX2ConditionEncodeNode(Node):
 
         cond_latent_frames = encoded.shape[2]
 
-        # Generate position embeddings with frame_idx offset
+        # Generate position embeddings at downscaled dims and scale back
         positions = get_pixel_coords(
-            latent_height=latent_height,
-            latent_width=latent_width,
+            latent_height=kf_latent_height,
+            latent_width=kf_latent_width,
             latent_num_frames=cond_latent_frames,
             frame_idx=latent_start,
             fps=frame_rate,
             vae_spatial_scale=vae_spatial_ratio,
             vae_temporal_scale=vae_temporal_ratio,
         )
+        # Scale spatial positions so they map to full-resolution pixel coords
+        if spatial_downscale > 1:
+            positions[:, 1, :] = positions[:, 1, :] * spatial_downscale
+            positions[:, 2, :] = positions[:, 2, :] * spatial_downscale
 
         num_tokens = packed_tokens.shape[1]
 
         logger.info(
-            "Condition %d (keyframe video): %d pixel frames → %d latent frames, %d tokens, strength=%.2f",
+            "Condition %d (keyframe video): %d pixel frames (stride=%d) → %d latent frames, %d tokens, strength=%.2f, spatial_ds=%d",
             condition_index,
             aligned_frames,
+            temporal_stride,
             cond_latent_frames,
             num_tokens,
             strength,
+            spatial_downscale,
         )
 
         return packed_tokens, positions, num_tokens
