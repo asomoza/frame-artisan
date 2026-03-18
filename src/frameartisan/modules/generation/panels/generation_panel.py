@@ -381,6 +381,16 @@ class GenerationPanel(BasePanel):
         sp_grid.addWidget(self.second_pass_guidance_slider, 1, 1)
 
         sp_layout.addLayout(sp_grid)
+
+        self.preview_stage1_checkbox = QCheckBox("Preview Stage 1")
+        self.preview_stage1_checkbox.setToolTip(
+            "Run stage 1 first and preview the result before committing to stage 2.\n"
+            "After preview, choose to continue to stage 2 or retry with different settings."
+        )
+        self.preview_stage1_checkbox.setChecked(bool(getattr(self.gen_settings, "preview_stage1", False)))
+        self.preview_stage1_checkbox.toggled.connect(self.on_preview_stage1_toggled)
+        sp_layout.addWidget(self.preview_stage1_checkbox)
+
         self.second_pass_frame.setLayout(sp_layout)
         main_layout.addWidget(self.second_pass_frame)
 
@@ -512,6 +522,7 @@ class GenerationPanel(BasePanel):
             QSignalBlocker(self.second_pass_checkbox),
             QSignalBlocker(self.second_pass_steps_slider),
             QSignalBlocker(self.second_pass_guidance_slider),
+            QSignalBlocker(self.preview_stage1_checkbox),
             QSignalBlocker(self.streaming_decode_checkbox),
             QSignalBlocker(self.ff_chunking_checkbox),
             QSignalBlocker(self.ff_num_chunks_spinbox),
@@ -542,6 +553,9 @@ class GenerationPanel(BasePanel):
             self.second_pass_checkbox.setChecked(bool(second_pass_enabled))
             self.second_pass_steps_slider.setValue(int(second_pass_steps))
             self.second_pass_guidance_slider.setValue(float(second_pass_guidance))
+            self.preview_stage1_checkbox.setChecked(
+                bool(getattr(self.gen_settings, "preview_stage1", False))
+            )
             self.streaming_decode_checkbox.setChecked(bool(streaming_decode))
             self.ff_chunking_checkbox.setChecked(bool(ff_chunking))
             self.ff_num_chunks_spinbox.setValue(int(ff_num_chunks))
@@ -581,6 +595,9 @@ class GenerationPanel(BasePanel):
             return
         self.event_bus.publish("generation_change", {"attr": "second_pass_enabled", "value": bool(checked)})
         self._update_second_pass_visibility()
+
+    def on_preview_stage1_toggled(self, checked: bool):
+        self.event_bus.publish("generation_change", {"attr": "preview_stage1", "value": bool(checked)})
 
     def on_second_pass_steps_changed(self, value: int):
         self.event_bus.publish("generation_change", {"attr": "second_pass_steps", "value": value})

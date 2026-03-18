@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QCheckBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QCheckBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
 from transformers import GemmaTokenizer
 
 from frameartisan.app.event_bus import EventBus
@@ -14,6 +14,8 @@ from frameartisan.modules.generation.widgets.prompt_input_widget import PromptIn
 class PromptBarWidget(QWidget):
     generate_clicked = pyqtSignal(object, str, str, bool, bool, bool)
     abort_clicked = pyqtSignal()
+    continue_stage2_clicked = pyqtSignal()
+    retry_stage1_clicked = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -80,9 +82,18 @@ class PromptBarWidget(QWidget):
         self.generate_button.setMaximumWidth(180)
         self.generate_button.clicked.connect(self.on_generate_clicked)
         actions_layout.addWidget(self.generate_button)
+
+        self.retry_button = QPushButton("Retry")
+        self.retry_button.setMaximumWidth(80)
+        self.retry_button.setVisible(False)
+        self.retry_button.clicked.connect(self.retry_stage1_clicked.emit)
+        actions_layout.addWidget(self.retry_button)
+
         actions_layout.setStretch(0, 1)
         actions_layout.setStretch(1, 1)
         main_layout.addLayout(actions_layout)
+
+        self._stage1_preview_mode = False
 
         main_layout.setStretch(0, 10)
         main_layout.setStretch(1, 2)
@@ -106,7 +117,32 @@ class PromptBarWidget(QWidget):
 
         prompt.update_token_count(num_tokens)
 
+    def set_stage1_preview_mode(self, active: bool) -> None:
+        """Toggle the prompt bar between preview mode and normal mode."""
+        self._stage1_preview_mode = active
+        self.retry_button.setVisible(active)
+        if active:
+            self.generate_button.setStyleSheet(
+                """
+                QPushButton {
+                    background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #2266cc, stop: 1 #144080);
+                }
+                QPushButton:hover {
+                    background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #2b7ee0, stop: 1 #1a5299);
+                }
+                QPushButton:pressed {
+                    background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #3399ff, stop: 1 #2266b3);
+                }
+                """
+            )
+            self.generate_button.setText("Continue to Stage 2")
+        else:
+            self.set_button_generate()
+
     def on_generate_clicked(self) -> None:
+        if self._stage1_preview_mode:
+            self.continue_stage2_clicked.emit()
+            return
         if self.generate_button.text() == "Abort":
             self.abort_clicked.emit()
             return

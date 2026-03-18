@@ -78,6 +78,7 @@ class GenerationSettings:
     second_pass_model: ModelDataObject = field(default_factory=ModelDataObject)
     second_pass_steps: int = 10
     second_pass_guidance: float = 4.0
+    preview_stage1: bool = False
 
     advanced_guidance: bool = False
     stg_scale: float = 0.0

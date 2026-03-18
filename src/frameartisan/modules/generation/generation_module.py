@@ -73,6 +73,9 @@ class GenerationModule(BaseModule):
         self.thread: NodeGraphThread | None = None
         self._last_run_json_graph: str | None = None
 
+        # Stage 1 preview state
+        self._stage1_preview_active: bool = False
+
         self._source_image_path: str | None = None
         self._source_image_layers: list = []
 
@@ -146,6 +149,8 @@ class GenerationModule(BaseModule):
 
         self.prompt_bar.generate_clicked.connect(self.on_generate)
         self.prompt_bar.abort_clicked.connect(self._on_abort_clicked)
+        self.prompt_bar.continue_stage2_clicked.connect(self._continue_stage2)
+        self.prompt_bar.retry_stage1_clicked.connect(self._retry_stage1)
 
         self.prompt_bar.generate_button.auto_save = self.preferences.auto_save_videos
         self.prompt_bar.generate_button.auto_save_changed.connect(self._on_auto_save_changed)
@@ -432,6 +437,19 @@ class GenerationModule(BaseModule):
             if upsample_node is not None:
                 upsample_node.upsampler_model_path = upsampler_path
                 upsample_node.set_updated()
+
+        # Stage 1 preview: temporarily disable stage 2 nodes so only
+        # stage 1 + decode runs.  The staged graph keeps stage 2 enabled
+        # so "continue to stage 2" can re-enable them via update_from_json.
+        use_preview = (
+            self.gen_settings.second_pass_enabled
+            and self.gen_settings.preview_stage1
+            and not self._stage1_preview_active
+            and not getattr(self, "_skip_preview", False)
+        )
+        if use_preview:
+            self._stage1_preview_active = True
+            self._toggle_second_pass(False)
 
         self.progress_bar.setValue(0)
         self.thread.save_video_metadata = self.preferences.save_video_metadata
@@ -1206,22 +1224,59 @@ class GenerationModule(BaseModule):
         if isinstance(result, str):
             # Video path from LTX2VideoSendNode
             self.video_viewer.load_video(result, autoplay=True)
-        self.prompt_bar.set_generating(False)
-        if duration is not None:
+
+        if self._stage1_preview_active:
+            # Stage 1 preview complete — show "Continue to Stage 2" button
+            self.prompt_bar.set_generating(False)
+            self.prompt_bar.set_stage1_preview_mode(True)
             self.event_bus.publish(
-                "status_message", {"action": "change", "message": f"Generation completed in {duration:.2f}s"}
+                "status_message",
+                {"action": "change", "message": f"Stage 1 preview ready ({duration:.1f}s). Continue or retry."},
             )
+        else:
+            self.prompt_bar.set_generating(False)
+            if duration is not None:
+                self.event_bus.publish(
+                    "status_message", {"action": "change", "message": f"Generation completed in {duration:.2f}s"}
+                )
         self._publish_compile_cache_size()
+
+    def _continue_stage2(self) -> None:
+        """Continue from stage 1 preview to stage 2.
+
+        Re-enables stage 2 nodes on the staged graph and runs again.  The
+        persistent run graph preserves stage 1 latents so only stage 2 +
+        decode actually execute.
+        """
+        self._stage1_preview_active = False
+        self._skip_preview = True
+        self.prompt_bar.set_stage1_preview_mode(False)
+        # Re-enable stage 2 on the staged graph — the serialized diff
+        # triggers update_from_json to mark only the changed nodes.
+        self._toggle_second_pass(True)
+        self._start_generation()
+        self._skip_preview = False
+
+    def _retry_stage1(self) -> None:
+        """Discard stage 1 preview and re-run with the current settings."""
+        self._stage1_preview_active = False
+        self.prompt_bar.set_stage1_preview_mode(False)
+        # Keep stage 2 disabled for another preview run
+        self._start_generation()
 
     def _on_generation_error(self, message: str, _recoverable: bool) -> None:
         logger.error("Generation error: %s", message)
         self._reset_progress_bar()
+        self._stage1_preview_active = False
+        self.prompt_bar.set_stage1_preview_mode(False)
         self.prompt_bar.set_generating(False)
         self.event_bus.publish("show_snackbar", {"action": "show", "message": message})
         self.event_bus.publish("status_message", {"action": "change", "message": "Generation failed"})
 
     def _on_generation_aborted(self) -> None:
         self._reset_progress_bar()
+        self._stage1_preview_active = False
+        self.prompt_bar.set_stage1_preview_mode(False)
         self.prompt_bar.set_generating(False)
         self.event_bus.publish("status_message", {"action": "change", "message": "Generation aborted"})
 
