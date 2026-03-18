@@ -31,6 +31,7 @@ class Node:
         "updated",
         "abort",
         "abort_callable",
+        "on_complete_callback",
     }
 
     _DICT_RESERVED_KEYS: ClassVar[set[str]] = {"class", "id", "name", "enabled", "state"}
@@ -49,6 +50,7 @@ class Node:
 
         self.device = None
         self.dtype = None
+        self.on_complete_callback = None
 
     def connect(self, input_name: str, node, output_name: str):
         if not isinstance(node, Node):

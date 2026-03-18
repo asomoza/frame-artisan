@@ -44,8 +44,20 @@ class ModelManager:
         self._offload_strategy: str = "auto"
         self._group_offload_use_stream: bool = False
         self._group_offload_low_cpu_mem: bool = False
+        self._ram_saving_mode: bool = False
         self._managed_components: dict[str, Any] = {}
         self._applied_strategy: str | None = None
+
+    @property
+    def is_ram_saving_mode(self) -> bool:
+        """True when the user selected RAM-saving (sequential_group_offload) mode."""
+        with self._lock:
+            return self._ram_saving_mode
+
+    @is_ram_saving_mode.setter
+    def is_ram_saving_mode(self, value: bool) -> None:
+        with self._lock:
+            self._ram_saving_mode = bool(value)
 
     @property
     def attention_backend(self) -> str:
@@ -208,6 +220,43 @@ class ModelManager:
         self.remove_offload_hooks(mod)
         apply_group_offloading(mod, **offload_kwargs)
         logger.info("Re-applied group offload hooks for %s", component_name)
+
+    def evict_component(self, name: str) -> None:
+        """Remove a named component from managed lifecycle, freeing its RAM."""
+        with self._lock:
+            mod = self._managed_components.pop(name, None)
+        if mod is None:
+            return
+        self.remove_offload_hooks(mod)
+        if hasattr(mod, "to"):
+            mod.to("cpu")
+        del mod
+        logger.info("Evicted managed component: %s", name)
+
+    def evict_cached(self, hash_key: str) -> bool:
+        """Remove a cached component by hash key, freeing its RAM."""
+        with self._lock:
+            obj = self._component_cache.pop(hash_key, None)
+        if obj is None:
+            return False
+        del obj
+        logger.info("Evicted cached component: %s", hash_key)
+        return True
+
+    def evict_component_and_cache(self, name: str, cache_hash: str | None = None) -> None:
+        """Evict a component from both managed and cache registries, then free memory."""
+        self.evict_component(name)
+        if cache_hash:
+            self.evict_cached(cache_hash)
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        try:
+            import ctypes
+
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except Exception:
+            pass
 
     def apply_offload_strategy(self, device: torch.device | str) -> str:
         """Resolve and apply the current offload strategy to all managed components.
@@ -485,6 +534,7 @@ class ModelManager:
             self._applied_strategy = None
             self._group_offload_use_stream = False
             self._group_offload_low_cpu_mem = False
+            self._ram_saving_mode = False
         gc.collect()
         gc.collect()  # second pass for cyclic refs
         if torch.cuda.is_available():

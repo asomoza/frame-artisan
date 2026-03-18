@@ -93,6 +93,9 @@ class NodeGraphThread(QThread):
             sp_denoise.on_start_callback = self._on_stage_started
             sp_denoise.callback = self.step_progress_update
 
+        # RAM-saving mode: evict transformers between stages
+        self._wire_ram_saving_callbacks(graph, node, sp_denoise)
+
         image_send = graph.get_node_by_name("image_send")
         if image_send is not None:
             image_send.image_callback = self.preview_image
@@ -249,6 +252,40 @@ class NodeGraphThread(QThread):
     def load_json_graph(self, json_graph: str, callbacks: dict | None = None):
         self._persistent_run_graph = None
         self.node_graph.update_from_json(json_graph, node_classes=self._node_classes, callbacks=callbacks)
+
+    def _wire_ram_saving_callbacks(self, graph, denoise_node, sp_denoise_node) -> None:
+        """Wire model eviction callbacks for RAM-saving (sequential_group_offload) mode."""
+        from frameartisan.app.model_manager import get_model_manager
+
+        mm = get_model_manager()
+        if not mm.is_ram_saving_mode:
+            return
+        if denoise_node is None or sp_denoise_node is None:
+            return
+        if not sp_denoise_node.enabled:
+            return
+
+        model_node = graph.get_node_by_name("model")
+        sp_model_node = graph.get_node_by_name("second_pass_model")
+        if model_node is None or sp_model_node is None:
+            return
+
+        def _evict_stage1_transformer(_node):
+            mm = get_model_manager()
+            s1_hash = getattr(model_node, "_transformer_cache_hash", None)
+            s2_hash = getattr(sp_model_node, "_transformer_cache_hash", None)
+            if s1_hash and s2_hash and s1_hash != s2_hash:
+                mm.evict_component_and_cache("transformer", s1_hash)
+                logger.info("RAM-saving: evicted stage 1 transformer after denoise")
+
+        def _evict_stage2_transformer(_node):
+            mm = get_model_manager()
+            s2_hash = getattr(sp_model_node, "_transformer_cache_hash", None)
+            mm.evict_component_and_cache("sp_transformer", s2_hash)
+            logger.info("RAM-saving: evicted stage 2 transformer after second_pass_denoise")
+
+        denoise_node.on_complete_callback = _evict_stage1_transformer
+        sp_denoise_node.on_complete_callback = _evict_stage2_transformer
 
     def _on_stage_started(self, total_steps: int) -> None:
         """Called when the 2nd pass starts. Free the tiny VAE to reclaim VRAM."""

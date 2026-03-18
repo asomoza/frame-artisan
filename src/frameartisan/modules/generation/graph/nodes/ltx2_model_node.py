@@ -71,6 +71,7 @@ class LTX2ModelNode(Node):
         self.status_callback = None
         self._prev_component_paths: dict[str, str] = {}
         self._prev_values: dict[str, object] = {}
+        self._transformer_cache_hash: str | None = None
 
     def _resolve_component_paths(self, model_path: str) -> dict[str, str]:
         """Resolve actual storage paths for components via the registry.
@@ -214,6 +215,7 @@ class LTX2ModelNode(Node):
                 logger.warning("sdnq package not available — SDNQ models will load dequantized (higher memory usage)")
 
         tr_hash = mm.component_hash(tr_path)
+        self._transformer_cache_hash = tr_hash
         transformer = mm.get_cached(tr_hash)
 
         # Always pass torch_dtype=bfloat16. For SDNQ models this casts
@@ -318,8 +320,14 @@ class LTX2ModelNode(Node):
         # stay alive until the next GC cycle, doubling RAM for these models.
         gc.collect()
 
-        # Propagate offload settings to ModelManager and apply
-        mm.offload_strategy = self.offload_strategy
+        # Propagate offload settings to ModelManager and apply.
+        # "sequential_group_offload" is a RAM-saving flag — actual GPU offloading
+        # always uses group_offload hooks (leaf-level with streams).
+        effective_strategy = self.offload_strategy
+        mm.is_ram_saving_mode = effective_strategy == "sequential_group_offload"
+        if effective_strategy == "sequential_group_offload":
+            effective_strategy = "group_offload"
+        mm.offload_strategy = effective_strategy
         mm.group_offload_use_stream = self.group_offload_use_stream
         mm.group_offload_low_cpu_mem = self.group_offload_low_cpu_mem
         strategy = mm.apply_offload_strategy(self.device)

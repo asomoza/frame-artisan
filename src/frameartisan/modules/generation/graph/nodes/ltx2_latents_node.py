@@ -292,19 +292,24 @@ class LTX2LatentsNode(Node):
             keyframe_group_sizes,
         )
 
+        # Move tensor outputs to CPU to free VRAM between stages.  The
+        # downstream denoise node will .to(device) each tensor as needed.
+        def _cpu(t):
+            return t.cpu() if hasattr(t, "cpu") else t
+
         self.values = {
-            "video_latents": video_latents,
-            "audio_latents": audio_latents,
-            "video_coords": video_coords,
-            "audio_coords": audio_coords,
+            "video_latents": _cpu(video_latents),
+            "audio_latents": _cpu(audio_latents),
+            "video_coords": _cpu(video_coords),
+            "audio_coords": _cpu(audio_coords),
             "latent_num_frames": latent_num_frames,
             "latent_height": latent_height,
             "latent_width": latent_width,
             "audio_num_frames": audio_num_frames,
-            "conditioning_mask": conditioning_mask,
-            "clean_latents": packed_clean_latents,
-            "clean_audio_latents": clean_audio_latents,
-            "audio_conditioning_mask": audio_conditioning_mask,
+            "conditioning_mask": _cpu(conditioning_mask),
+            "clean_latents": _cpu(packed_clean_latents),
+            "clean_audio_latents": _cpu(clean_audio_latents),
+            "audio_conditioning_mask": _cpu(audio_conditioning_mask),
             "base_num_tokens": base_num_tokens,
             "keyframe_group_sizes": keyframe_group_sizes,
             "keyframe_attention_scales": self.keyframe_attention_scales,

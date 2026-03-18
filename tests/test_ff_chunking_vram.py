@@ -232,10 +232,6 @@ def test_ff_chunking_seq_group_offload_no_stream(tmp_path, model_4bit):
     assert os.path.isfile(videos[0])
 
 
-@pytest.mark.skip(
-    reason="FF chunking calls FF multiple times per block, which disrupts "
-    "stream-based sequential group offload's execution-order tracing"
-)
 def test_ff_chunking_seq_group_offload_stream(tmp_path, model_4bit):
     videos = _run_single_stage(
         str(tmp_path),

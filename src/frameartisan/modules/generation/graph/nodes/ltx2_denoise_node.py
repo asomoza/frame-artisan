@@ -125,6 +125,11 @@ class LTX2DenoiseNode(Node):
 
         device = self.device
 
+        # Ensure coords are on the correct device (they may have been stored
+        # on CPU between graph stages to reduce VRAM pressure).
+        video_coords = video_coords.to(device=device)
+        audio_coords = audio_coords.to(device=device)
+
         # Distilled model: force fixed parameters and sigma schedule
         sigmas = None
         if model_type == 2:
@@ -147,6 +152,8 @@ class LTX2DenoiseNode(Node):
         prompt_embeds = prompt_embeds.to(device=device)
         audio_prompt_embeds = audio_prompt_embeds.to(device=device)
         attention_mask = attention_mask.to(device=device)
+        if conditioning_mask is not None:
+            conditioning_mask = conditioning_mask.to(device=device, dtype=torch.float32)
         if clean_latents is not None:
             clean_latents = clean_latents.to(device=device, dtype=torch.float32)
         if clean_audio_latents is not None:
@@ -402,6 +409,7 @@ class LTX2DenoiseNode(Node):
                     # switch to video_latents for the last 2 steps (converged, no overshoot)
                     if self.callback is not None:
                         preview = video_latents if i >= len(timesteps) - 2 else pred_x0
+                        preview = self._strip_concat_tokens(preview)
                         self.callback(i, t, preview)
 
                     # Clear compile status after first step (compilation is done)
@@ -419,8 +427,8 @@ class LTX2DenoiseNode(Node):
                 self._cleanup_lora_masks()
             video_latents = self._strip_concat_tokens(video_latents)
             self.values = {
-                "video_latents": video_latents,
-                "audio_latents": audio_latents,
+                "video_latents": video_latents.cpu(),
+                "audio_latents": audio_latents.cpu(),
             }
             return self.values
         except Exception as e:
@@ -434,8 +442,8 @@ class LTX2DenoiseNode(Node):
             self._cleanup_lora_masks()
         video_latents = self._strip_concat_tokens(video_latents)
         self.values = {
-            "video_latents": video_latents,
-            "audio_latents": audio_latents,
+            "video_latents": video_latents.cpu(),
+            "audio_latents": audio_latents.cpu(),
         }
         return self.values
 
@@ -841,6 +849,7 @@ class LTX2DenoiseNode(Node):
 
                     if self.callback is not None:
                         preview = video_latents if i >= len(timesteps) - 2 else pred_x0
+                        preview = self._strip_concat_tokens(preview)
                         self.callback(i, t, preview)
 
                     if i == 0 and self.use_torch_compile and self.status_callback is not None:
@@ -856,8 +865,8 @@ class LTX2DenoiseNode(Node):
                 self._cleanup_lora_masks()
             video_latents = self._strip_concat_tokens(video_latents)
             self.values = {
-                "video_latents": video_latents,
-                "audio_latents": audio_latents,
+                "video_latents": video_latents.cpu(),
+                "audio_latents": audio_latents.cpu(),
             }
             return
         except Exception as e:
@@ -871,6 +880,6 @@ class LTX2DenoiseNode(Node):
             self._cleanup_lora_masks()
         video_latents = self._strip_concat_tokens(video_latents)
         self.values = {
-            "video_latents": video_latents,
-            "audio_latents": audio_latents,
+            "video_latents": video_latents.cpu(),
+            "audio_latents": audio_latents.cpu(),
         }

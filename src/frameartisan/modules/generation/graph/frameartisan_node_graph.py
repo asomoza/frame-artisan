@@ -156,6 +156,17 @@ class FrameArtisanNodeGraph:
 
                     node.updated = False
 
+                    cb = getattr(node, "on_complete_callback", None)
+                    if cb is not None:
+                        cb(node)
+
+                    # Reclaim CUDA allocator cache between nodes.  Without this,
+                    # fragmented blocks from earlier stages can prevent large
+                    # contiguous allocations in later stages (e.g. stage-2 at
+                    # 4× the token count of stage-1).
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+
             # Ensure offload strategy is applied even when the model node was
             # skipped (e.g. only the strategy changed, not the model_path).
             mm.apply_offload_strategy(self.device)

@@ -71,6 +71,7 @@ class GenerationModule(BaseModule):
 
         self.node_graph: FrameArtisanNodeGraph | None = None
         self.thread: NodeGraphThread | None = None
+        self._last_run_json_graph: str | None = None
 
         self._source_image_path: str | None = None
         self._source_image_layers: list = []
@@ -298,7 +299,7 @@ class GenerationModule(BaseModule):
                     self.directories,
                     self.preferences,
                     self.video_viewer,
-                    lambda: self.node_graph.to_json() if self.node_graph else None,
+                    lambda: self._last_run_json_graph,
                 ),
             },
             "lora_advanced": {
@@ -448,6 +449,7 @@ class GenerationModule(BaseModule):
             )
 
         json_graph = self.node_graph.to_json()
+        self._last_run_json_graph = json_graph
         self.thread.start_generation(json_graph)
         self.prompt_bar.set_generating(True)
 
@@ -924,6 +926,7 @@ class GenerationModule(BaseModule):
                 "pixel_frame_index": pixel_frame_index,
                 "strength": strength,
                 "attention_scale": data.get("attention_scale", 1.0),
+                "method": data.get("method", "auto"),
             }
 
             self._sync_conditions_to_node()
@@ -952,6 +955,8 @@ class GenerationModule(BaseModule):
                 cond["strength"] = data["strength"]
             if "attention_scale" in data:
                 cond["attention_scale"] = data["attention_scale"]
+            if "method" in data:
+                cond["method"] = data["method"]
             self._sync_conditions_to_node()
 
         elif action == "remove":
@@ -989,6 +994,7 @@ class GenerationModule(BaseModule):
                 "pixel_frame_index": cond["pixel_frame_index"],
                 "strength": cond["strength"],
                 "attention_scale": cond.get("attention_scale", 1.0),
+                "method": cond.get("method", "auto"),
             }
             for cond in self._visual_conditions.values()
         ]
@@ -1562,6 +1568,7 @@ class GenerationModule(BaseModule):
                 cond_meta = conditions_list[i] if i < len(conditions_list) else {}
                 pixel_frame_index = cond_meta.get("pixel_frame_index", 1)
                 strength = cond_meta.get("strength", 1.0)
+                method = cond_meta.get("method", "auto")
 
                 self.event_bus.publish(
                     "visual_condition",
@@ -1572,6 +1579,7 @@ class GenerationModule(BaseModule):
                         "source_thumb_path": restored_path,
                         "pixel_frame_index": pixel_frame_index,
                         "strength": strength,
+                        "method": method,
                     },
                 )
 

@@ -133,11 +133,12 @@ class LTX2ConditionEncodeNode(Node):
         frame_rate = float(self.frame_rate)
         ref_downscale = int(self.reference_downscale_factor) if self.reference_downscale_factor is not None else 1
 
-        # First pass: replace conditions (write into clean_latents/conditioning_mask in-place)
-        # Frame 0 conditions use in-place replacement (VideoConditionByLatentIndex).
-        # Non-frame-0 conditions use the keyframe append approach
-        # (VideoConditionByKeyframeIndex) — the original LTX-2 method that avoids
-        # the "pause + quality shift" artefact.
+        # First pass: replace and keyframe conditions.
+        # Each condition has a "method" (images) or "mode" (videos) that controls routing:
+        #   "replace"  → in-place replacement into clean_latents (hard constraint)
+        #   "keyframe" → append as attention reference tokens (soft guidance)
+        #   "auto"     → frame 0 uses replace, other frames use keyframe
+        #   "concat"   → handled in second pass (IC-LoRA style)
         keyframe_tokens_list: list[torch.Tensor] = []
         keyframe_positions_list: list[torch.Tensor] = []
         keyframe_strengths_list: list[float] = []
@@ -148,26 +149,36 @@ class LTX2ConditionEncodeNode(Node):
         video_idx = 0
         for i, condition in enumerate(self.conditions):
             cond_type = condition.get("type", "image")
-            mode = condition.get("mode", "replace")
             pixel_frame_index = int(condition.get("pixel_frame_index", 1))
             strength = float(condition.get("strength", 1.0))
             attention_scale = float(condition.get("attention_scale", 1.0))
 
-            if mode != "replace":
-                # Non-replace conditions handled in second pass (concat)
+            # Resolve the effective method for this condition
+            if cond_type == "video":
+                # Video conditions use "mode" field
+                raw_method = condition.get("mode", "replace")
+            else:
+                # Image conditions use "method" field
+                raw_method = condition.get("method", "auto")
+
+            if raw_method == "concat":
+                # Concat conditions handled in second pass
                 if cond_type == "video":
                     video_idx += 1
                 else:
                     image_idx += 1
                 continue
 
-            # Resolve pixel frame index → latent frame index
-            resolved_pfi = pixel_frame_index
-            if resolved_pfi < 0:
-                resolved_pfi = num_frames_snapped + resolved_pfi + 1
-            latent_idx = (resolved_pfi - 1) // vae_temporal_ratio
-            latent_idx = max(0, min(latent_idx, latent_num_frames - 1))
-            is_frame_zero = latent_idx == 0
+            # Resolve "auto": frame 0 → replace, others → keyframe
+            if raw_method == "auto":
+                resolved_pfi = pixel_frame_index
+                if resolved_pfi < 0:
+                    resolved_pfi = num_frames_snapped + resolved_pfi + 1
+                latent_idx = (resolved_pfi - 1) // vae_temporal_ratio
+                latent_idx = max(0, min(latent_idx, latent_num_frames - 1))
+                effective_method = "replace" if latent_idx == 0 else "keyframe"
+            else:
+                effective_method = raw_method  # "replace" or "keyframe"
 
             if cond_type == "video":
                 if video_idx >= len(raw_videos):
@@ -179,8 +190,7 @@ class LTX2ConditionEncodeNode(Node):
                 if source_start >= 1 and source_end >= source_start:
                     video_clip = video_clip[source_start - 1 : source_end]
 
-                if is_frame_zero:
-                    # Frame 0: in-place replacement (original VideoConditionByLatentIndex)
+                if effective_method == "replace":
                     self._encode_video_condition(
                         video_clip,
                         pixel_frame_index,
@@ -201,7 +211,6 @@ class LTX2ConditionEncodeNode(Node):
                         i,
                     )
                 else:
-                    # Non-frame-0: keyframe tokens (original VideoConditionByKeyframeIndex)
                     result = self._encode_video_keyframe(
                         video_clip,
                         pixel_frame_index,
@@ -235,8 +244,7 @@ class LTX2ConditionEncodeNode(Node):
                     image_idx += 1
                     continue
 
-                if is_frame_zero:
-                    # Frame 0: in-place replacement
+                if effective_method == "replace":
                     self._encode_image_condition(
                         raw_images[image_idx],
                         pixel_frame_index,
@@ -256,7 +264,6 @@ class LTX2ConditionEncodeNode(Node):
                         i,
                     )
                 else:
-                    # Non-frame-0: keyframe tokens
                     result = self._encode_image_keyframe(
                         raw_images[image_idx],
                         pixel_frame_index,

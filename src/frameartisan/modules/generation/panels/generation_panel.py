@@ -601,6 +601,7 @@ class GenerationPanel(BasePanel):
         visible = self.second_pass_checkbox.isChecked()
         self.second_pass_frame.setVisible(visible)
         self._update_torch_compile_availability()
+        self._update_ram_saving_availability()
 
     def _update_torch_compile_availability(self):
         """Disable torch.compile when 2nd pass is enabled (shape changes cause recompilation)."""
@@ -773,29 +774,35 @@ class GenerationPanel(BasePanel):
             self.low_cpu_mem_checkbox.setEnabled(self.use_stream_checkbox.isChecked())
 
     def _update_ff_stream_exclusivity(self):
-        """FF chunking and sequential_group_offload + CUDA streams are incompatible.
+        """FF chunking and CUDA streams are compatible.
 
-        FF chunking calls the FF module multiple times per block forward, which
-        disrupts the stream-based execution-order tracing used for prefetching.
-        When one is active, disable and uncheck the other.
+        FF chunking calls the FF module multiple times per block forward.
+        The stream-based prefetch chain handles this correctly — duplicate
+        module entries in the execution order result in suboptimal (but
+        correct) prefetching with synchronous loads at chunk boundaries.
         """
-        strategy = self.offload_strategy_combobox.currentData()
-        is_seq = strategy == "sequential_group_offload"
-        stream_on = self.use_stream_checkbox.isChecked() and self.use_stream_checkbox.isVisible()
-        ff_on = self.ff_chunking_checkbox.isChecked()
+        self.ff_chunking_checkbox.setEnabled(True)
+        if self.use_stream_checkbox.isVisible():
+            self.use_stream_checkbox.setEnabled(True)
 
-        if is_seq and stream_on and ff_on:
-            # Both active — CUDA streams take priority, disable FF chunking
-            self.ff_chunking_checkbox.setChecked(False)
-            self.ff_chunking_checkbox.setEnabled(False)
-        elif is_seq and stream_on:
-            self.ff_chunking_checkbox.setEnabled(False)
-        elif is_seq and ff_on:
-            self.use_stream_checkbox.setEnabled(False)
-        else:
-            self.ff_chunking_checkbox.setEnabled(True)
-            if self.use_stream_checkbox.isVisible():
-                self.use_stream_checkbox.setEnabled(True)
+    def _update_ram_saving_availability(self):
+        """Enable/disable the RAM Saving (2-Stage) offload option based on two-stage state."""
+        two_stage_on = self.second_pass_checkbox.isChecked()
+        model = self.offload_strategy_combobox.model()
+        for i in range(self.offload_strategy_combobox.count()):
+            if self.offload_strategy_combobox.itemData(i) == "sequential_group_offload":
+                item = model.item(i)
+                if two_stage_on:
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEnabled)
+                else:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+                    # Fall back if currently selected
+                    if self.offload_strategy_combobox.currentData() == "sequential_group_offload":
+                        self._set_offload_strategy_ui("group_offload")
+                        self.event_bus.publish(
+                            "generation_change", {"attr": "offload_strategy", "value": "group_offload"}
+                        )
+                break
 
     def _set_offload_strategy_ui(self, strategy: str):
         for i in range(self.offload_strategy_combobox.count()):

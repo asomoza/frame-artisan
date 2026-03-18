@@ -95,6 +95,6 @@ OFFLOAD_STRATEGIES: dict[str, str] = {
     "auto": "Auto",
     "no_offload": "No Offload",
     "model_offload": "Model Offload",
-    "sequential_group_offload": "Sequential Group Offload",
+    "sequential_group_offload": "RAM Saving (2-Stage)",
     "group_offload": "Group Offload",
 }

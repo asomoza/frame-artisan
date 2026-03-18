@@ -128,6 +128,21 @@ class LTX2SecondPassLatentsNode(Node):
             )
             packed_clean_for_output = pack_latents(clean_5d, patch_size=1, patch_size_t=1)
 
+        # Move latents to GPU for noise operations (they may be on CPU from
+        # upstream nodes that store outputs on CPU to reduce VRAM pressure).
+        video_latents = video_latents.to(device=device)
+        audio_latents = audio_latents.to(device=device)
+        if conditioning_mask is not None:
+            conditioning_mask = conditioning_mask.to(device=device)
+        if clean_latents_packed is not None:
+            clean_latents_packed = clean_latents_packed.to(device=device)
+        if packed_clean_for_output is not None:
+            packed_clean_for_output = packed_clean_for_output.to(device=device)
+        if clean_audio_latents is not None:
+            clean_audio_latents = clean_audio_latents.to(device=device)
+        if audio_conditioning_mask is not None:
+            audio_conditioning_mask = audio_conditioning_mask.to(device=device)
+
         if model_type == 2:
             noise_scale = LTX2_STAGE2_DISTILLED_SIGMAS[0]
 
@@ -235,19 +250,24 @@ class LTX2SecondPassLatentsNode(Node):
             is_i2v,
         )
 
+        # Move tensor outputs to CPU to free VRAM between stages.  The
+        # downstream denoise node will .to(device) each tensor as needed.
+        def _cpu(t):
+            return t.cpu() if hasattr(t, "cpu") else t
+
         self.values = {
-            "video_latents": video_latents,
-            "audio_latents": audio_latents,
-            "video_coords": video_coords,
-            "audio_coords": audio_coords,
+            "video_latents": _cpu(video_latents),
+            "audio_latents": _cpu(audio_latents),
+            "video_coords": _cpu(video_coords),
+            "audio_coords": _cpu(audio_coords),
             "latent_num_frames": latent_num_frames,
             "latent_height": latent_height,
             "latent_width": latent_width,
             "audio_num_frames": audio_num_frames,
-            "conditioning_mask": conditioning_mask,
-            "clean_latents": packed_clean_for_output,
-            "clean_audio_latents": clean_audio_latents,
-            "audio_conditioning_mask": audio_conditioning_mask,
+            "conditioning_mask": _cpu(conditioning_mask),
+            "clean_latents": _cpu(packed_clean_for_output),
+            "clean_audio_latents": _cpu(clean_audio_latents),
+            "audio_conditioning_mask": _cpu(audio_conditioning_mask),
             "base_num_tokens": None,
         }
         return self.values
