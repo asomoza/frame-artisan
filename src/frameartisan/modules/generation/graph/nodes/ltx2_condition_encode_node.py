@@ -690,12 +690,14 @@ class LTX2ConditionEncodeNode(Node):
             positions[:, 1, :] = positions[:, 1, :] * downscale_factor
             positions[:, 2, :] = positions[:, 2, :] * downscale_factor
 
-        # Create denoise mask: (1 - strength) per token, matching reference pipeline
-        # convention. The model is trained with concat tokens at full timestep.
+        # Create conditioning mask: strength per token, matching the reference
+        # pipeline convention where 1.0 = fully conditioned (timestep=0, clean)
+        # and 0.0 = unconditioned (full timestep, noisy).  The concat tokens
+        # are clean VAE-encoded references so they must see timestep=0.
         num_tokens = concat_tokens.shape[1]
-        denoise_mask = torch.full(
+        conditioning_mask = torch.full(
             (1, num_tokens, 1),
-            fill_value=1.0 - strength,
+            fill_value=strength,
             dtype=concat_tokens.dtype,
         )
 
@@ -709,7 +711,7 @@ class LTX2ConditionEncodeNode(Node):
             downscale_factor,
         )
 
-        return concat_tokens, positions, denoise_mask
+        return concat_tokens, positions, conditioning_mask
 
     @staticmethod
     def _encode_image_keyframe(

@@ -266,15 +266,14 @@ class LTX2LatentsNode(Node):
         # Extend video_coords with concat position embeddings
         if concat_positions_input is not None:
             concat_pos = concat_positions_input.to(device=device, dtype=video_coords.dtype)
-            # concat_pos: [1, 3, N] → [1, 3, N, 2] to match video_coords [B, 3, tokens, 2]
-            concat_pos_4d = concat_pos.unsqueeze(-1).expand(-1, -1, -1, video_coords.shape[-1])
-            video_coords = torch.cat([video_coords, concat_pos_4d], dim=2)
+            # concat_pos is already [1, 3, N, 2] with [start, end) bounds
+            video_coords = torch.cat([video_coords, concat_pos], dim=2)
 
         # Extend video_coords with keyframe position embeddings
         if keyframe_positions_input is not None:
             kf_pos = keyframe_positions_input.to(device=device, dtype=video_coords.dtype)
-            kf_pos_4d = kf_pos.unsqueeze(-1).expand(-1, -1, -1, video_coords.shape[-1])
-            video_coords = torch.cat([video_coords, kf_pos_4d], dim=2)
+            # kf_pos is already [1, 3, N, 2] with [start, end) bounds
+            video_coords = torch.cat([video_coords, kf_pos], dim=2)
 
         audio_coords = transformer.audio_rope.prepare_audio_coords(
             audio_latents.shape[0],

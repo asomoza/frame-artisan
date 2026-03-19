@@ -157,12 +157,13 @@ def get_pixel_coords(
     vae_temporal_scale: int = 8,
     device: torch.device | None = None,
 ) -> torch.Tensor:
-    """Generate pixel coordinates for concatenated conditioning tokens (IC-LoRA style).
+    """Generate pixel coordinates for concatenated/keyframe conditioning tokens.
 
-    Returns shape ``[1, 3, num_tokens]`` with ``(t, y, x)`` coordinates
-    using the same temporal convention as the base RoPE
-    (``prepare_video_coords``): pixel-space temporal coords with causal
-    offset, divided by FPS.
+    Returns shape ``[1, 3, num_tokens, 2]`` with ``[start, end)`` bounds
+    per ``(t, y, x)`` dimension, matching the format of
+    ``prepare_video_coords``.  The RoPE takes the midpoint of each bound
+    pair, so providing proper ``[start, end)`` ensures concat/keyframe
+    tokens have the same positional alignment as base video tokens.
     """
     y_coords = torch.arange(latent_height, device=device)
     x_coords = torch.arange(latent_width, device=device)
@@ -177,17 +178,23 @@ def get_pixel_coords(
     frame_indices = frame_indices + frame_idx
 
     # Match prepare_video_coords temporal convention:
-    # pixel_t = (latent_frame * vae_temporal_scale + causal_offset - vae_temporal_scale).clamp(0)
-    # This gives the "start" boundary of each latent frame in pixel space.
+    # pixel_start = (latent_frame * scale + causal_offset - scale).clamp(0)
+    # pixel_end   = ((latent_frame + 1) * scale + causal_offset - scale).clamp(0)
     causal_offset = 1
-    t_pixel = (frame_indices.float() * vae_temporal_scale + causal_offset - vae_temporal_scale).clamp(min=0)
-    t_coords = t_pixel / fps
+    t_start = (frame_indices.float() * vae_temporal_scale + causal_offset - vae_temporal_scale).clamp(min=0) / fps
+    t_end = ((frame_indices.float() + 1) * vae_temporal_scale + causal_offset - vae_temporal_scale).clamp(min=0) / fps
 
-    y_coords_all = yy_flat.repeat(latent_num_frames) * vae_spatial_scale
-    x_coords_all = xx_flat.repeat(latent_num_frames) * vae_spatial_scale
+    # Spatial: [start, start + scale) per latent pixel
+    y_start = yy_flat.repeat(latent_num_frames).float() * vae_spatial_scale
+    y_end = y_start + vae_spatial_scale
+    x_start = xx_flat.repeat(latent_num_frames).float() * vae_spatial_scale
+    x_end = x_start + vae_spatial_scale
 
-    positions = torch.stack([t_coords, y_coords_all, x_coords_all], dim=0)
-    positions = positions.unsqueeze(0)
+    # Stack into [3, N, 2] then unsqueeze batch → [1, 3, N, 2]
+    starts = torch.stack([t_start, y_start, x_start], dim=0)  # [3, N]
+    ends = torch.stack([t_end, y_end, x_end], dim=0)  # [3, N]
+    positions = torch.stack([starts, ends], dim=-1)  # [3, N, 2]
+    positions = positions.unsqueeze(0)  # [1, 3, N, 2]
     return positions
 
 
