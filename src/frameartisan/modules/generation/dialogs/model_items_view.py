@@ -129,7 +129,7 @@ class ModelItemsView(QWidget):
         filters_layout = QHBoxLayout()
 
         self.model_type_combobox = QComboBox()
-        self.model_type_combobox.addItem("All", 0)
+        self.model_type_combobox.addItem("All", -1)
         type_map = LORA_MODEL_TYPES if self.database_table == "lora" else MODEL_TYPES
         for model_type, type_name in type_map.items():
             self.model_type_combobox.addItem(type_name, model_type)

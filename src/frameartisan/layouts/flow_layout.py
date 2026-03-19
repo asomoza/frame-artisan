@@ -170,7 +170,7 @@ class FlowLayout(QLayout):
                 name_match = self.name_filter.lower() in item_name.lower() if self.name_filter else True
 
                 type_match = True
-                if int(self.type_filter) != 0:
+                if int(self.type_filter) != -1:
                     if item_type is None:
                         item_type = "1"
                     type_match = self.type_filter == item_type
