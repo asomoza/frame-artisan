@@ -332,8 +332,9 @@ class GenerationModule(BaseModule):
             image_path = cond.get("image_path")
             layers = cond.get("layers", [])
         else:
-            image_path = self._source_image_path
-            layers = self._source_image_layers
+            # New condition — start with a blank canvas
+            image_path = None
+            layers = []
         return SourceImageDialog(
             "source_image",
             self.directories,
@@ -901,6 +902,13 @@ class GenerationModule(BaseModule):
             )
             return
 
+        if condition_id and action == "update_layers":
+            # Save layers to the visual condition so they survive dialog close/reopen
+            cond = self._visual_conditions.get(condition_id)
+            if cond is not None:
+                cond["layers"] = data.get("layers", [])
+                return
+
         if action in ("add", "update"):
             self._source_image_path = data.get("source_image_path")
             self._source_image_layers = data.get("layers", self._source_image_layers)
@@ -1025,6 +1033,7 @@ class GenerationModule(BaseModule):
         conditions = [
             {
                 "type": "image",
+                "condition_id": cond["id"],
                 "pixel_frame_index": cond["pixel_frame_index"],
                 "strength": cond["strength"],
                 "attention_scale": cond.get("attention_scale", 1.0),
@@ -1617,12 +1626,15 @@ class GenerationModule(BaseModule):
         if condition_encode_data is not None and source_image_nodes:
             # New multi-condition path
             conditions_list = condition_encode_data.get("state", {}).get("conditions", [])
-            # Match conditions to image nodes by order
-            sorted_img_names = sorted(source_image_nodes.keys())
+            # Build lookup: condition_id → condition metadata
+            cond_by_id = {
+                c.get("condition_id"): c
+                for c in conditions_list
+                if c.get("type") == "image" and c.get("condition_id")
+            }
             restored_count = 0
             enabled_count = 0
-            for i, node_name in enumerate(sorted_img_names):
-                img_data = source_image_nodes[node_name]
+            for node_name, img_data in source_image_nodes.items():
                 if not img_data.get("enabled", False):
                     continue
                 enabled_count += 1
@@ -1635,8 +1647,9 @@ class GenerationModule(BaseModule):
                 restored_count += 1
                 # Extract condition_id from node name (source_image_<id>)
                 condition_id = node_name.removeprefix("source_image_")
-                # Get frame/strength from conditions list if available
-                cond_meta = conditions_list[i] if i < len(conditions_list) else {}
+                # Match by condition_id; fall back to defaults if not found
+                # (backward compat with graphs saved before condition_id was stored)
+                cond_meta = cond_by_id.get(condition_id, {})
                 pixel_frame_index = cond_meta.get("pixel_frame_index", 1)
                 strength = cond_meta.get("strength", 1.0)
                 method = cond_meta.get("method", "auto")
