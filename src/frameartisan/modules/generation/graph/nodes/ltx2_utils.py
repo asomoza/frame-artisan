@@ -217,6 +217,7 @@ def build_keyframe_attention_mask(
     attention_scales: list[float] | None = None,
     dtype: torch.dtype = torch.float32,
     device: torch.device | None = None,
+    force_cross_group_isolation: bool = False,
 ) -> torch.Tensor | None:
     """Build self-attention mask for keyframe conditioning.
 
@@ -242,6 +243,14 @@ def build_keyframe_attention_mask(
         or ``None`` when there are no keyframe groups.
     """
     if not keyframe_group_sizes:
+        return None
+
+    # Fast path: when all attention scales are 1.0 and isolation is not forced,
+    # the mask would be all zeros (or only block cross-group attention).
+    # Skipping it preserves flash attention, saving significant VRAM.
+    has_non_full_scale = attention_scales is not None and any(s < 1.0 for s in attention_scales)
+    needs_cross_group = force_cross_group_isolation and len(keyframe_group_sizes) > 1
+    if not has_non_full_scale and not needs_cross_group:
         return None
 
     total = num_base_tokens + sum(keyframe_group_sizes)

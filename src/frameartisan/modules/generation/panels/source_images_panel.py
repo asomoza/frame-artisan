@@ -67,13 +67,19 @@ class _ConditionEntry(QWidget):
         self.strength_slider.setSingleStep(0.05)
         self.strength_slider.setValue(1.0)
         self.strength_slider.setOrientation(Qt.Orientation.Horizontal)
+        self.strength_slider.setToolTip(
+            "How strongly this image conditions the output.\n"
+            "1.0 = full conditioning, 0.0 = no effect."
+        )
         self.strength_slider.valueChanged.connect(self._on_settings_changed)
         strength_layout.addWidget(self.strength_slider)
         layout.addLayout(strength_layout)
 
         # Attention slider (controls how much the model "sees" this condition)
+        # Only visible when "Isolate Keyframes" is enabled (requires attention mask)
+        self.attention_label = QLabel("Attention:")
         attention_layout = QHBoxLayout()
-        attention_layout.addWidget(QLabel("Attention:"))
+        attention_layout.addWidget(self.attention_label)
         self.attention_slider = QLabeledDoubleSlider()
         self.attention_slider.setRange(0.0, 1.0)
         self.attention_slider.setSingleStep(0.05)
@@ -82,11 +88,14 @@ class _ConditionEntry(QWidget):
         self.attention_slider.setToolTip(
             "Controls how strongly the model attends to this condition.\n"
             "Only affects non-first-frame conditions (keyframes).\n"
-            "1.0 = full attention, 0.0 = ignored"
+            "1.0 = full attention, 0.0 = ignored.\n"
+            "Requires 'Isolate Keyframes' to be enabled."
         )
         self.attention_slider.valueChanged.connect(self._on_settings_changed)
         attention_layout.addWidget(self.attention_slider)
         layout.addLayout(attention_layout)
+        self.attention_label.setVisible(False)
+        self.attention_slider.setVisible(False)
 
         # Method selector
         method_layout = QHBoxLayout()
@@ -152,6 +161,10 @@ class _ConditionEntry(QWidget):
             "attention_scale": self.attention_slider.value(),
             "method": self.method_combo.currentData() or "auto",
         }
+
+    def set_attention_visible(self, visible: bool) -> None:
+        self.attention_label.setVisible(visible)
+        self.attention_slider.setVisible(visible)
 
     def _on_last_toggled(self, checked: bool) -> None:
         self.frame_slider.setEnabled(not checked)
@@ -229,6 +242,14 @@ class SourceImagesPanel(BasePanel):
         add_image_button.clicked.connect(self.open_image_dialog)
         add_image_button.setObjectName("green_button")
         self.main_layout.addWidget(add_image_button)
+
+        self.isolate_checkbox = QCheckBox("Isolate Keyframes")
+        self.isolate_checkbox.setToolTip(
+            "When enabled, keyframe images cannot attend to each other.\n"
+            "Produces more random motion between keyframes but uses more VRAM."
+        )
+        self.isolate_checkbox.toggled.connect(self._on_isolate_changed)
+        self.main_layout.addWidget(self.isolate_checkbox)
 
         # Stretch at the end — entries are inserted before this
         self.main_layout.addStretch()
@@ -312,6 +333,8 @@ class SourceImagesPanel(BasePanel):
         finally:
             del blocker
 
+        entry.set_attention_visible(self.isolate_checkbox.isChecked())
+
         self._entries[condition_id] = entry
         # Insert before the trailing stretch
         self.main_layout.insertWidget(self.main_layout.count() - 1, entry)
@@ -364,6 +387,11 @@ class SourceImagesPanel(BasePanel):
 
         elif action == "remove":
             self._remove_condition_entry(condition_id)
+
+    def _on_isolate_changed(self, checked: bool) -> None:
+        for entry in self._entries.values():
+            entry.set_attention_visible(checked)
+        self.event_bus.publish("generation_change", {"attr": "keyframe_isolate", "value": checked})
 
     def _on_generation_change(self, data: dict) -> None:
         attr = data.get("attr")

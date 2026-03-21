@@ -597,6 +597,14 @@ class GenerationModule(BaseModule):
                     model_node.ff_num_chunks = value
                     model_node.set_updated()
 
+        if attr == "keyframe_isolate":
+            if self.node_graph is not None:
+                for name in ("denoise", "second_pass_denoise"):
+                    node = self.node_graph.get_node_by_name(name)
+                    if node is not None:
+                        node.keyframe_isolate = value
+                        node.set_updated()
+
         if attr in ("preview_decode", "preview_time_upscale", "preview_space_upscale"):
             self._sync_preview_decode_settings()
 

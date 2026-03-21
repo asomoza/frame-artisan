@@ -60,13 +60,14 @@ class LTX2DenoiseNode(Node):
     ]
     OUTPUTS: ClassVar[list[str]] = ["video_latents", "audio_latents"]
 
-    SERIALIZE_INCLUDE: ClassVar[set[str]] = set()
+    SERIALIZE_INCLUDE: ClassVar[set[str]] = {"keyframe_isolate"}
 
     def __init__(self):
         super().__init__()
         self.callback = None
         self.on_start_callback = None
         self.status_callback = None
+        self.keyframe_isolate: bool = False
         # Exposed for live preview: set during __call__ so callers can unpack latents.
         self._latent_height: int = 0
         self._latent_width: int = 0
@@ -270,6 +271,7 @@ class LTX2DenoiseNode(Node):
                     keyframe_hooks = self._install_keyframe_attention(
                         transformer, video_latents, keyframe_group_sizes,
                         self.keyframe_attention_scales, do_cfg, device,
+                        force_isolate=self.keyframe_isolate,
                     )
                 # Install LoRA spatial/temporal masks
                 if self.lora_masks:
@@ -456,7 +458,8 @@ class LTX2DenoiseNode(Node):
 
     @staticmethod
     def _install_keyframe_attention(
-        transformer, video_latents, keyframe_group_sizes, keyframe_attention_scales, do_cfg, device
+        transformer, video_latents, keyframe_group_sizes, keyframe_attention_scales,
+        do_cfg, device, force_isolate=False,
     ):
         """Build and install the keyframe self-attention mask on the transformer."""
         import torch
@@ -481,6 +484,7 @@ class LTX2DenoiseNode(Node):
             attention_scales=keyframe_attention_scales,
             dtype=model_dtype,
             device=device,
+            force_cross_group_isolation=force_isolate,
         )
         if mask is None:
             return None
@@ -677,7 +681,8 @@ class LTX2DenoiseNode(Node):
                 # Install keyframe attention mask (batch_size=1 for advanced guidance)
                 if keyframe_group_sizes:
                     keyframe_hooks = self._install_keyframe_attention(
-                        transformer, video_latents, keyframe_group_sizes, False, device
+                        transformer, video_latents, keyframe_group_sizes, False, device,
+                        force_isolate=self.keyframe_isolate,
                     )
                 # Install LoRA spatial/temporal masks
                 if self.lora_masks:

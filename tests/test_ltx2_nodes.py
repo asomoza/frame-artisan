@@ -382,8 +382,8 @@ class TestLTX2DenoiseNodeMetadata:
     def test_outputs(self):
         assert set(LTX2DenoiseNode.OUTPUTS) == {"video_latents", "audio_latents"}
 
-    def test_serialize_include_is_empty(self):
-        assert LTX2DenoiseNode.SERIALIZE_INCLUDE == set()
+    def test_serialize_include(self):
+        assert LTX2DenoiseNode.SERIALIZE_INCLUDE == {"keyframe_isolate"}
 
     def test_callback_defaults_to_none(self):
         node = LTX2DenoiseNode()
@@ -423,8 +423,7 @@ class TestLTX2DenoiseNodeSerialization:
         node.id = 1
         node.name = "denoise"
         d = node.to_dict()
-        # SERIALIZE_INCLUDE = set() means state should be empty or absent
-        assert d.get("state", {}) == {}
+        assert d.get("state", {}) == {"keyframe_isolate": False}
 
 
 # ---------------------------------------------------------------------------
