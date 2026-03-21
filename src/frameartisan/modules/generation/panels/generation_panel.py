@@ -537,8 +537,8 @@ class GenerationPanel(BasePanel):
             self.video_dimensions.height_slider.setValue(int(height))
             self.video_dimensions.video_width_value_label.setText(str(int(width)))
             self.video_dimensions.video_height_value_label.setText(str(int(height)))
-            self.video_dimensions._prev_width = int(width)
-            self.video_dimensions._prev_height = int(height)
+            if self.video_dimensions.linked_button.linked:
+                self.video_dimensions._aspect_ratio = int(width) / int(height)
             self.steps_slider.setValue(int(num_inference_steps))
             self.guidance_slider.setValue(float(guidance_scale))
             self.duration_slider.setValue(int(video_duration))

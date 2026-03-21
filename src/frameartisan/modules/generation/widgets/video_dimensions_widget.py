@@ -23,8 +23,7 @@ class VideoDimensionsWidget(QWidget):
 
         self.event_bus = EventBus()
         self._updating_linked = False
-        self._prev_width = _MIN_DIM
-        self._prev_height = _MIN_DIM
+        self._aspect_ratio: float | None = None
 
         self.init_ui()
 
@@ -47,6 +46,7 @@ class VideoDimensionsWidget(QWidget):
         sliders_layout.addWidget(self.video_width_value_label, 0, 2)
 
         self.linked_button = LinkedButton()
+        self.linked_button.clicked.connect(self._on_link_toggled)
         sliders_layout.addWidget(self.linked_button, 0, 3, 2, 1, Qt.AlignmentFlag.AlignCenter)
 
         height_label = QLabel("Height")
@@ -69,6 +69,14 @@ class VideoDimensionsWidget(QWidget):
 
         self.setLayout(main_layout)
 
+    def _on_link_toggled(self):
+        if self.linked_button.linked:
+            width = _snap(self.width_slider.value())
+            height = _snap(self.height_slider.value())
+            self._aspect_ratio = width / height
+        else:
+            self._aspect_ratio = None
+
     def on_slider_value_changed(self):
         if self._updating_linked:
             return
@@ -77,27 +85,23 @@ class VideoDimensionsWidget(QWidget):
         nearest_value = _snap(slider.value())
 
         if slider == self.width_slider:
-            delta = nearest_value - self._prev_width
-            self._prev_width = nearest_value
             self.video_width_value_label.setText(str(nearest_value))
             self.event_bus.publish("generation_change", {"attr": "video_width", "value": nearest_value})
 
-            if self.linked_button.linked and delta != 0:
-                new_height = _snap(self._prev_height + delta)
-                self._prev_height = new_height
+            if self.linked_button.linked and self._aspect_ratio is not None:
+                new_height = _snap(round(nearest_value / self._aspect_ratio))
                 self._update_other_slider(
                     self.height_slider, self.video_height_value_label, "video_height", new_height
                 )
         else:
-            delta = nearest_value - self._prev_height
-            self._prev_height = nearest_value
             self.video_height_value_label.setText(str(nearest_value))
             self.event_bus.publish("generation_change", {"attr": "video_height", "value": nearest_value})
 
-            if self.linked_button.linked and delta != 0:
-                new_width = _snap(self._prev_width + delta)
-                self._prev_width = new_width
-                self._update_other_slider(self.width_slider, self.video_width_value_label, "video_width", new_width)
+            if self.linked_button.linked and self._aspect_ratio is not None:
+                new_width = _snap(round(nearest_value * self._aspect_ratio))
+                self._update_other_slider(
+                    self.width_slider, self.video_width_value_label, "video_width", new_width
+                )
 
     def _update_other_slider(self, slider: QSlider, label: QLabel, attr: str, value: int) -> None:
         self._updating_linked = True
