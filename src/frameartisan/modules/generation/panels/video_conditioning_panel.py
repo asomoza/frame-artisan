@@ -24,6 +24,8 @@ class VideoConditioningPanel(BasePanel):
         self.setAcceptDrops(True)
 
         self._video_path: str | None = None
+        self._original_video_path: str | None = None  # Always points to user's source file
+        self._editor_state: dict | None = None  # Last applied trim/resolution from video editor
         self._video_frame_count: int = 0
         self._video_fps: float = 0.0
         self._has_audio: bool = False
@@ -50,6 +52,11 @@ class VideoConditioningPanel(BasePanel):
         load_button.clicked.connect(self._on_load_video)
         load_button.setObjectName("green_button")
         main_layout.addWidget(load_button)
+
+        self.edit_button = QPushButton("Edit Video")
+        self.edit_button.setEnabled(False)
+        self.edit_button.clicked.connect(self._on_edit_video)
+        main_layout.addWidget(self.edit_button)
 
         self.file_label = QLabel("No video loaded")
         self.file_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -270,6 +277,20 @@ class VideoConditioningPanel(BasePanel):
         if temporal is not None:
             self.event_bus.publish("generation_change", {"attr": "keyframe_temporal_stride", "value": int(temporal)})
 
+    def _on_edit_video(self) -> None:
+        path = self._original_video_path or self._video_path
+        if path is None:
+            return
+        self.event_bus.publish(
+            "manage_dialog",
+            {
+                "dialog_type": "video_editor",
+                "action": "open",
+                "video_path": path,
+                "editor_state": self._editor_state,
+            },
+        )
+
     def _on_enabled_changed(self, checked: bool) -> None:
         self.event_bus.publish("generation_change", {"attr": "video_conditioning_enabled", "value": checked})
 
@@ -346,8 +367,8 @@ class VideoConditioningPanel(BasePanel):
         self._video_path = path
         self.file_label.setText(os.path.basename(path))
 
-        # Probe video for frame count, fps, and audio presence
-        self._video_frame_count, self._video_fps, self._has_audio = self._probe_video(path)
+        # Probe video for frame count, fps, audio presence, and dimensions
+        self._video_frame_count, self._video_fps, self._has_audio, self._video_width, self._video_height = self._probe_video(path)
 
         if self._video_fps > 0:
             duration = self._video_frame_count / self._video_fps
@@ -376,6 +397,7 @@ class VideoConditioningPanel(BasePanel):
         self.source_range_slider.setEnabled(self._video_frame_count > 1)
         self.mode_combo.setEnabled(True)
         self.remove_button.setEnabled(True)
+        self.edit_button.setEnabled(True)
 
         # Update audio checkbox state
         if self._has_audio:
@@ -405,7 +427,7 @@ class VideoConditioningPanel(BasePanel):
             self._on_enabled_changed(True)
 
     @staticmethod
-    def _probe_video(path: str) -> tuple[int, float, bool]:
+    def _probe_video(path: str) -> tuple[int, float, bool, int, int]:
         try:
             import av
 
@@ -417,9 +439,11 @@ class VideoConditioningPanel(BasePanel):
                     frame_count = sum(1 for _ in container.decode(video=0))
                 fps = float(stream.average_rate) if stream.average_rate else 0.0
                 has_audio = len(container.streams.audio) > 0
-                return frame_count, fps, has_audio
+                width = stream.width
+                height = stream.height
+                return frame_count, fps, has_audio, width, height
         except Exception:
-            return 0, 0.0, False
+            return 0, 0.0, False, 0, 0
 
     @staticmethod
     def _extract_audio(video_path: str, output_path: str) -> bool:
@@ -574,6 +598,8 @@ class VideoConditioningPanel(BasePanel):
             self.event_bus.publish("audio_condition", {"action": "remove", "from_video": True})
 
         self._video_path = None
+        self._original_video_path = None
+        self._editor_state = None
         self._video_frame_count = 0
         self._video_fps = 0.0
         self._has_audio = False
@@ -588,6 +614,7 @@ class VideoConditioningPanel(BasePanel):
         self.source_range_slider.setEnabled(False)
         self.mode_combo.setEnabled(False)
         self.remove_button.setEnabled(False)
+        self.edit_button.setEnabled(False)
         self.enabled_checkbox.setEnabled(False)
         self.use_audio_checkbox.setEnabled(False)
         self.use_audio_checkbox.setToolTip("Video has no audio track")
@@ -669,7 +696,15 @@ class VideoConditioningPanel(BasePanel):
         action = data.get("action")
         if action == "add":
             path = data.get("video_path")
-            if path and path != self._video_path:
+            if path:
+                self._original_video_path = path
+                self._editor_state = None
+                if path != self._video_path:
+                    self._set_video(path)
+        elif action == "update_video":
+            path = data.get("video_path")
+            if path:
+                self._editor_state = data.get("editor_state")
                 self._set_video(path)
         elif action == "remove":
             if self._video_path is not None:

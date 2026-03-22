@@ -322,7 +322,25 @@ class GenerationModule(BaseModule):
                 "key": lambda data: "source_image",
                 "factory": lambda data: self._create_source_image_dialog(data),
             },
+            "video_editor": {
+                "key": lambda _data: "video_editor",
+                "factory": lambda data: self._create_video_editor_dialog(data),
+            },
         }
+
+    def _create_video_editor_dialog(self, data: dict):
+        from frameartisan.modules.generation.video_editor.video_editor_dialog import VideoEditorDialog
+
+        dialog = VideoEditorDialog(
+            "video_editor",
+            self.directories,
+            self.preferences,
+            data.get("video_path", ""),
+            self.gen_settings.video_width,
+            self.gen_settings.video_height,
+            editor_state=data.get("editor_state"),
+        )
+        return dialog
 
     def _create_source_image_dialog(self, data: dict) -> SourceImageDialog:
         condition_id = data.get("condition_id")
@@ -1169,6 +1187,19 @@ class GenerationModule(BaseModule):
                 self._video_condition["source_frame_end"] = data["source_frame_end"]
             self._sync_conditions_to_node()
 
+        elif action == "update_video":
+            # Video editor produced a processed temp file — update the node path
+            if self._video_condition is None:
+                return
+            new_path = data.get("video_path")
+            if new_path and self.node_graph is not None:
+                node_name = self._video_condition.get("node_name")
+                vid_node = self.node_graph.get_node_by_name(node_name)
+                if vid_node is not None:
+                    vid_node.update_path(new_path)
+                self._video_condition["video_path"] = new_path
+                self._sync_conditions_to_node()
+
         elif action == "remove":
             if self._video_condition is None:
                 return
@@ -1225,6 +1256,12 @@ class GenerationModule(BaseModule):
             dialog_key = spec["key"](data)
             if dialog_key is None:
                 return
+            # Reload video in cached video editor if the source changed
+            if dialog_type == "video_editor" and dialog_key in self.dialogs:
+                dialog = self.dialogs[dialog_key]
+                video_path = data.get("video_path", "")
+                if video_path and video_path != dialog._video_path:
+                    dialog.load_video(video_path, editor_state=data.get("editor_state"))
             self.open_dialog(dialog_key, lambda: spec["factory"](data))
         elif action == "close":
             close_key_fn = spec.get("close_key", spec["key"])
