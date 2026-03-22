@@ -66,6 +66,11 @@ diffusers = { git = "https://github.com/huggingface/diffusers" }
 [project.scripts]
 frameartisan = "frameartisan.__main__:main"
 
+[tool.setuptools.package-data]
+"frameartisan.theme" = ["*.qss"]
+"frameartisan.theme.icons" = ["*.png"]
+"frameartisan.theme.images" = ["*.webp"]
+
 [build-system]
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"

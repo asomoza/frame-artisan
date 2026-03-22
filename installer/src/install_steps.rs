@@ -151,6 +151,8 @@ async fn run_install_inner(
             app_tarball.to_str().unwrap(),
             "--extra-index-url",
             torch_index,
+            "--index-strategy",
+            "unsafe-best-match",
             "--python",
             venv_path.to_str().unwrap(),
         ],
