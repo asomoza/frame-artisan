@@ -28,7 +28,10 @@ class FlowLayout(QLayout):
 
     def matches_filters(self, item):
         if item.widget() is not None:
-            model_data = item.widget().model_data
+            model_data = getattr(item.widget(), "model_data", None)
+            if model_data is None:
+                return True
+
             item_tags = model_data.tags
             item_name = model_data.name
 
@@ -137,6 +140,40 @@ class FlowLayout(QLayout):
                 return i
         return -1
 
+    def replace_widget_at(self, index: int, new_widget: QWidget, defer_update: bool = False):
+        """Replace the widget at index, preserving position in both lists."""
+        if index < 0 or index >= len(self._item_list):
+            return
+        old_item = self._item_list[index]
+        old_widget = old_item.widget()
+
+        # addWidget parents the widget and creates a QWidgetItem via addItem,
+        # which appends to both _item_list and _visible_items.
+        self.addWidget(new_widget)
+        new_item = self._item_list.pop()  # remove from end of _item_list
+        self._item_list[index] = new_item
+
+        # Remove the entry that addItem appended to _visible_items
+        # (we'll place it at the correct position below)
+        try:
+            self._visible_items.remove(new_item)
+        except ValueError:
+            pass
+
+        # Put new_item where old_item was in visible list
+        try:
+            vis_index = self._visible_items.index(old_item)
+            self._visible_items[vis_index] = new_item
+        except ValueError:
+            if self.matches_filters(new_item):
+                self._visible_items.append(new_item)
+
+        old_widget.setParent(None)
+        old_widget.deleteLater()
+
+        if not defer_update:
+            self.update()
+
     def remove_item(self, item: QWidget):
         index = self.index_of(item)
         if index >= 0:
@@ -186,7 +223,7 @@ class FlowLayout(QLayout):
 
     def order_by(self):
         self._visible_items.sort(
-            key=lambda item: getattr(item.widget().model_data, self.sort_key, "").lower(),
+            key=lambda item: (getattr(getattr(item.widget(), "model_data", None), self.sort_key, None) or "").lower(),
             reverse=(self.sort_direction == "desc"),
         )
         self.update()

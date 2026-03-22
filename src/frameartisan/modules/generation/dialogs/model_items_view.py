@@ -1,9 +1,11 @@
 import logging
 import os
+import queue
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -26,12 +28,11 @@ from frameartisan.app.preferences import PreferencesObject
 from frameartisan.layouts.flow_layout import FlowLayout
 from frameartisan.modules.generation.constants import LORA_MODEL_TYPES, MODEL_TYPES
 from frameartisan.modules.generation.data_objects.model_item_data_object import ModelItemDataObject
-from frameartisan.modules.generation.threads.model_items_image_loader_thread import ModelItemsImageLoaderThread
-from frameartisan.modules.generation.threads.model_items_loader_thread import ModelItemsLoaderThread
 from frameartisan.modules.generation.threads.model_items_scanner_thread import ModelItemsScannerThread
 from frameartisan.modules.generation.widgets.drop_lightbox_widget import DropLightBox
 from frameartisan.modules.generation.widgets.item_selector_widget import ItemSelectorWidget
 from frameartisan.modules.generation.widgets.model_item_widget import ModelItemWidget
+from frameartisan.modules.generation.widgets.skeleton_item_widget import SkeletonItemWidget
 from frameartisan.utils.database import Database
 from frameartisan.utils.model_utils import calculate_file_hash
 
@@ -69,17 +70,31 @@ class ModelItemsView(QWidget):
         self.database_table = database_table
         self._type_map = LORA_MODEL_TYPES if database_table == "lora" else MODEL_TYPES
 
-        self.model_items_loader_thread = None
-        self.model_items_image_loader_thread = None
         self.model_items_scanner_thread = None
-        self.all_batches_loaded = False
 
         self.tags = None
         self.hide_nsfw = True
 
+        # Viewport-based hydration state
+        self._hydrated: set[int] = set()  # layout indices already hydrated
+        self._pending_images: int = 0  # number of images still being loaded
+        self._image_pool = ThreadPoolExecutor(max_workers=4)
+        self._image_results: queue.Queue = queue.Queue()
+
         self.setAcceptDrops(True)
 
         self.init_ui()
+
+        # Drain timer: batches image results onto UI thread
+        self._drain_timer = QTimer(self)
+        self._drain_timer.setInterval(16)
+        self._drain_timer.timeout.connect(self._drain_image_results)
+
+        # Scroll debounce timer
+        self._scroll_timer = QTimer(self)
+        self._scroll_timer.setSingleShot(True)
+        self._scroll_timer.setInterval(50)
+        self._scroll_timer.timeout.connect(self._hydrate_visible)
 
         self.load_items()
 
@@ -91,8 +106,9 @@ class ModelItemsView(QWidget):
         super().closeEvent(event)
 
     def _shutdown_all_threads(self):
-        self._shutdown_thread("model_items_loader_thread", request_stop=True)
-        self._shutdown_thread("model_items_image_loader_thread", request_stop=True)
+        self._drain_timer.stop()
+        self._scroll_timer.stop()
+        self._image_pool.shutdown(wait=False, cancel_futures=True)
         self._shutdown_thread("model_items_scanner_thread", request_stop=True)
 
     def _shutdown_thread(self, attr_name: str, request_stop: bool = False):
@@ -185,16 +201,21 @@ class ModelItemsView(QWidget):
         self.loading_layout.addWidget(self.loading_info_label)
         main_layout.addWidget(self.loading_widget)
 
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
         self.flow_widget = QWidget()
         self.flow_widget.setObjectName("flow_widget")
         self.flow_layout = FlowLayout(self.flow_widget)
-        scroll_area.setWidget(self.flow_widget)
-        main_layout.addWidget(scroll_area)
+        self.scroll_area.setWidget(self.flow_widget)
+        main_layout.addWidget(self.scroll_area)
+
+        # Connect scroll to viewport hydration
+        self.scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll)
 
         self.drop_lightbox = DropLightBox(self)
         self.drop_lightbox.setText("Drop file here")
+
+    # ── Scanning ──────────────────────────────────────────────
 
     def toggle_scan(self):
         if self.loading:
@@ -254,21 +275,150 @@ class ModelItemsView(QWidget):
         self.loading_progress_bar.setValue(current)
         self.loading_info_label.setText(f"{current}/{total}")
 
+    # ── Loading (skeleton + viewport hydration) ───────────────
+
     def load_items(self):
-        if not self.loading:
-            self.loading = True
-            self.flow_layout.clear()
-            self.tags = []
-            self.all_batches_loaded = False
+        if self.loading:
+            return
 
-            if self.model_items_loader_thread is None:
-                self.model_items_loader_thread = ModelItemsLoaderThread(
-                    self.directories.data_path, self.database_table, 50, self.preferences.hide_nsfw
-                )
-                self.model_items_loader_thread.batch_loaded.connect(self.add_batch)
-                self.model_items_loader_thread.finished_loading.connect(self.on_loading_finished)
+        self.loading = True
+        self.flow_layout.clear()
+        self.tags = []
+        self._hydrated.clear()
 
-            self.model_items_loader_thread.start()
+        # Load all metadata from DB (fast — just a SELECT)
+        database = Database(os.path.join(self.directories.data_path, "app.db"))
+        columns = ModelItemDataObject.get_column_names()
+        conditions = {"deleted": 0}
+        all_rows = database.select(
+            self.database_table, columns, conditions, order_by="name", order_by_direction="ASC"
+        )
+        database.disconnect()
+
+        # Create skeletons for all items
+        for row in all_rows:
+            model_data = ModelItemDataObject.from_tuple(row)
+
+            if self.preferences.hide_nsfw and model_data.tags is not None and "nsfw" in model_data.tags:
+                continue
+
+            skeleton = SkeletonItemWidget(model_data, self.thumb_width, self.thumb_height)
+            self.flow_layout.addWidget(skeleton)
+
+            if model_data.tags is not None:
+                self.tags.extend(model_data.tags.split(", "))
+
+        self.refresh_tags()
+        self.loading = False
+        self.finished_loading.emit()
+
+        # Hydrate the initially visible items (short delay so layout pass completes first)
+        QTimer.singleShot(100, self._hydrate_visible)
+
+    def _on_scroll(self):
+        self._scroll_timer.start()
+
+    def _hydrate_visible(self):
+        """Find visible skeletons and replace them with real ModelItemWidgets."""
+        scroll_y = self.scroll_area.verticalScrollBar().value()
+        viewport_h = self.scroll_area.viewport().height()
+
+        # Visible region of flow_widget, with 1 viewport buffer above and below
+        visible_top = scroll_y - viewport_h
+        visible_bottom = scroll_y + viewport_h + viewport_h
+
+        items_to_hydrate = []
+
+        for i in range(self.flow_layout.count()):
+            if i in self._hydrated:
+                continue
+
+            item = self.flow_layout.itemAt(i)
+            widget = item.widget()
+
+            if not isinstance(widget, SkeletonItemWidget):
+                self._hydrated.add(i)
+                continue
+
+            if not widget.isVisible():
+                continue
+
+            widget_y = widget.geometry().y()
+            widget_bottom = widget_y + widget.height()
+
+            if widget_bottom >= visible_top and widget_y <= visible_bottom:
+                items_to_hydrate.append((i, widget))
+
+        if not items_to_hydrate:
+            return
+
+        # Batch-replace all skeletons, then do a single layout update
+        for layout_index, skeleton in items_to_hydrate:
+            model_data = skeleton.model_data
+            model_item = ModelItemWidget(
+                model_data, self.default_pixmap, self.thumb_width, self.thumb_height, type_map=self._type_map
+            )
+            model_item.clicked.connect(lambda mi=model_item: self.model_item_clicked.emit(mi))
+            self.flow_layout.replace_widget_at(layout_index, model_item, defer_update=True)
+            self._hydrated.add(layout_index)
+
+        # Force a full re-layout so new widgets get positioned
+        self.flow_layout.invalidate()
+        self.flow_widget.adjustSize()
+
+        # Load images in parallel
+        self._pending_images += len(items_to_hydrate)
+        self._drain_timer.start()
+        for layout_index, skeleton in items_to_hydrate:
+            self._image_pool.submit(self._load_image_async, layout_index, skeleton.model_data)
+
+    def _load_image_async(self, layout_index: int, model_data: ModelItemDataObject):
+        """Runs in thread pool — reads thumbnail from disk."""
+        image_path = model_data.thumbnail
+        if image_path is None:
+            self._image_results.put((layout_index, None))
+            return
+
+        try:
+            with open(image_path, "rb") as f:
+                data = f.read()
+            self._image_results.put((layout_index, data))
+        except Exception as e:
+            logger.error(f"Error loading image for {model_data.name}: {e}")
+            self._image_results.put((layout_index, None))
+
+    def _drain_image_results(self):
+        """Called by timer on UI thread — applies loaded images in batch."""
+        count = 0
+        while not self._image_results.empty() and count < 20:
+            try:
+                layout_index, data = self._image_results.get_nowait()
+            except queue.Empty:
+                break
+
+            self._pending_images -= 1
+
+            if data is None:
+                count += 1
+                continue
+
+            item = self.flow_layout.itemAt(layout_index)
+            if item is None:
+                count += 1
+                continue
+
+            widget = item.widget()
+            if isinstance(widget, ModelItemWidget):
+                qimage = QImage.fromData(data)
+                pixmap = QPixmap.fromImage(qimage)
+                widget.update_model_image(pixmap)
+
+            count += 1
+
+        if self._pending_images <= 0:
+            self._drain_timer.stop()
+
+    # ── Single item add (import / scan) ───────────────────────
 
     def add_single_item_from_path(self, filepath: str, filename: str, *, component_mapping: dict | None = None):
         database = Database(os.path.join(self.directories.data_path, "app.db"))
@@ -329,7 +479,6 @@ class ModelItemsView(QWidget):
             except Exception as e:
                 logger.error(f"Error inserting model item: {e}")
 
-        # Register component mappings if provided
         if component_mapping and model_item.id:
             try:
                 from frameartisan.app.app import get_app_database_path
@@ -349,15 +498,6 @@ class ModelItemsView(QWidget):
         database.disconnect()
         self.add_model_item(model_item, image_buffer)
 
-    def add_batch(self, items: list[ModelItemDataObject]):
-        model_items = []
-
-        for item in items:
-            model_item = self.add_model_item(item)
-            model_items.append(model_item)
-
-        self.load_model_images(model_items)
-
     def add_model_item(self, model_data: ModelItemDataObject, image_buffer: BytesIO = None, replace: bool = False):
         if image_buffer is not None:
             qimage = QImage.fromData(image_buffer.getvalue())
@@ -372,12 +512,15 @@ class ModelItemsView(QWidget):
             self.remove_item_from_layout(model_data.id)
 
         self.flow_layout.addWidget(model_item)
+        self._hydrated.add(self.flow_layout.count() - 1)
 
         if model_data.tags is not None:
             tags = model_data.tags.split(", ")
             self.tags.extend(tags)
 
         return model_item
+
+    # ── Misc ──────────────────────────────────────────────────
 
     def on_import_model(self):
         dialog = QFileDialog()
@@ -387,49 +530,10 @@ class ModelItemsView(QWidget):
         filepath, _ = dialog.getOpenFileName(None, "Select a a model", "", "*.safetensors", options=options)
         self.item_imported.emit(filepath)
 
-    def load_model_images(self, model_items: list):
-        if self.model_items_image_loader_thread is None:
-            self.model_items_image_loader_thread = ModelItemsImageLoaderThread(self.flow_layout, model_items)
-            self.model_items_image_loader_thread.image_loaded.connect(self.update_model_image)
-            self.model_items_image_loader_thread.finished_loading.connect(self.on_model_images_finished)
-        else:
-            self.model_items_image_loader_thread.model_items = model_items
-
-        self.model_items_image_loader_thread.start()
-
-    def on_model_images_finished(self):
-        self._shutdown_thread("model_items_image_loader_thread")
-
-        if not self.all_batches_loaded:
-            if self.model_items_loader_thread is not None:
-                self.model_items_loader_thread.resume()
-            return
-
-        self.refresh_tags()
-        self.loading = False
-        self.finished_loading.emit()
-
-    def update_model_image(self, item_index: int, buffer: BytesIO):
-        qimage = QImage.fromData(buffer.getvalue())
-        pixmap = QPixmap.fromImage(qimage)
-
-        item = self.flow_layout.itemAt(item_index)
-        model_item = item.widget()
-        model_item.update_model_image(pixmap)
-
     def refresh_tags(self):
         tags = list(set(self.tags))
         tags.sort()
         self.tags_selector.add_items(tags)
-
-    def on_loading_finished(self):
-        self.all_batches_loaded = True
-        self._shutdown_thread("model_items_loader_thread")
-
-        if self.model_items_image_loader_thread is None:
-            self.refresh_tags()
-            self.loading = False
-            self.finished_loading.emit()
 
     def on_reload_items(self):
         self.tags_selector.clear_selected_items()
@@ -477,6 +581,8 @@ class ModelItemsView(QWidget):
         name = self.name_line_edit.text()
         model_type = self.model_type_combobox.currentData()
         self.flow_layout.set_filters(tags, name, model_type)
+        # Re-hydrate after filter changes (newly visible skeletons)
+        QTimer.singleShot(0, self._hydrate_visible)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -499,6 +605,6 @@ class ModelItemsView(QWidget):
     def remove_item_from_layout(self, item_id: int):
         for i in range(self.flow_layout.count()):
             item = self.flow_layout.itemAt(i)
-            if item and isinstance(item.widget(), ModelItemWidget) and item.widget().model_data.id == item_id:
+            if item and item.widget().model_data is not None and item.widget().model_data.id == item_id:
                 self.flow_layout.remove_item(item.widget())
                 break
