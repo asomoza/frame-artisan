@@ -159,11 +159,13 @@ class TestTriggerDisplay:
 
         widget = LoraInfoWidget(model_item, dirs)
 
-        assert widget.triggers_layout.count() == 3
+        # 3 trigger labels + 1 stretch spacer
         labels = []
         for i in range(widget.triggers_layout.count()):
             item = widget.triggers_layout.itemAt(i)
-            labels.append(item.widget().text())
+            w = item.widget()
+            if w is not None:
+                labels.append(w.text())
         assert labels == ["style1", "style2", "style3"]
 
     def test_trigger_click_publishes_event(self, qapp):
@@ -180,8 +182,15 @@ class TestTriggerDisplay:
         received = []
         EventBus().subscribe("lora", lambda data: received.append(data))
 
-        button = widget.triggers_layout.itemAt(0).widget()
-        button.click()
+        from PyQt6.QtCore import QEvent, QPointF, Qt
+        from PyQt6.QtGui import QMouseEvent
+
+        label = widget.triggers_layout.itemAt(0).widget()
+        event = QMouseEvent(
+            QEvent.Type.MouseButtonPress, QPointF(0, 0), QPointF(0, 0),
+            Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+        )
+        label.mousePressEvent(event)
 
         assert len(received) >= 1
         trigger_events = [e for e in received if e.get("action") == "trigger_clicked"]

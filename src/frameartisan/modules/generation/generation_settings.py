@@ -75,6 +75,7 @@ class GenerationSettings:
     video_conditioning_mode: str = "replace"
     keyframe_spatial_downscale: int = 1
     keyframe_temporal_stride: int = 1
+    keyframe_speed: int = 1
 
     second_pass_enabled: bool = False
     second_pass_model: ModelDataObject = field(default_factory=ModelDataObject)

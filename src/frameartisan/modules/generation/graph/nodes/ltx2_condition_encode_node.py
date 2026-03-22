@@ -36,7 +36,9 @@ class LTX2ConditionEncodeNode(Node):
         "keyframe_group_sizes",
         "keyframe_attention_scales",
     ]
-    SERIALIZE_INCLUDE: ClassVar[set[str]] = {"conditions", "keyframe_spatial_downscale", "keyframe_temporal_stride"}
+    SERIALIZE_INCLUDE: ClassVar[set[str]] = {
+        "conditions", "keyframe_spatial_downscale", "keyframe_temporal_stride", "keyframe_speed",
+    }
 
     def __init__(self):
         super().__init__()
@@ -44,6 +46,7 @@ class LTX2ConditionEncodeNode(Node):
         self.conditions: list[dict] = []
         self.keyframe_spatial_downscale: int = 1
         self.keyframe_temporal_stride: int = 1
+        self.keyframe_speed: int = 1
 
     def update_conditions(self, conditions: list[dict]) -> None:
         self.conditions = conditions
@@ -234,6 +237,7 @@ class LTX2ConditionEncodeNode(Node):
                         i,
                         spatial_downscale=self.keyframe_spatial_downscale,
                         temporal_stride=self.keyframe_temporal_stride,
+                        speed=self.keyframe_speed,
                     )
                     if result is not None:
                         tokens, positions, num_tokens = result
@@ -755,11 +759,14 @@ class LTX2ConditionEncodeNode(Node):
         latent_idx = (pixel_frame_index - 1) // vae_temporal_ratio
         latent_idx = max(0, min(latent_idx, latent_num_frames - 1))
 
-        # Spatial downscale
-        encode_height = height // spatial_downscale
-        encode_width = width // spatial_downscale
-        kf_latent_height = latent_height // spatial_downscale
-        kf_latent_width = latent_width // spatial_downscale
+        # Spatial downscale — snap to VAE spatial ratio
+        vae_sp = getattr(vae, "spatial_compression_ratio", 32)
+        encode_height = (height // spatial_downscale // vae_sp) * vae_sp
+        encode_width = (width // spatial_downscale // vae_sp) * vae_sp
+        encode_height = max(encode_height, vae_sp)
+        encode_width = max(encode_width, vae_sp)
+        kf_latent_height = encode_height // vae_sp
+        kf_latent_width = encode_width // vae_sp
 
         # Preprocess image: numpy HWC uint8 → torch [1, C, H, W] float32 in [-1, 1]
         image_tensor = torch.from_numpy(image).float() / 255.0
@@ -838,12 +845,16 @@ class LTX2ConditionEncodeNode(Node):
         condition_index: int,
         spatial_downscale: int = 1,
         temporal_stride: int = 1,
+        speed: int = 1,
     ) -> tuple | None:
         """Encode a video clip as keyframe tokens (appended to sequence).
 
         Args:
             spatial_downscale: Spatial downscale factor (1=full, 2=half, 4=quarter).
-            temporal_stride: Take every Nth frame (1=all, 2=every 2nd, 4=every 4th).
+            temporal_stride: Take every Nth frame for VRAM reduction (positions scaled
+                to preserve motion speed).
+            speed: Speed multiplier — skip frames to compress time (positions NOT
+                scaled, so motion appears faster).
 
         Returns ``(packed_tokens, positions, num_tokens)`` or ``None``.
         """
@@ -877,7 +888,11 @@ class LTX2ConditionEncodeNode(Node):
 
         video_clip = video_frames[:use_frames]
 
-        # Temporal subsampling: take every Nth frame to reduce token count
+        # Speed: skip frames to compress time (motion speeds up)
+        if speed > 1:
+            video_clip = video_clip[::speed]
+
+        # Temporal downsample: skip frames to reduce tokens (motion preserved via position scaling)
         if temporal_stride > 1:
             video_clip = video_clip[::temporal_stride]
 
@@ -898,11 +913,14 @@ class LTX2ConditionEncodeNode(Node):
                 axis=0,
             )
 
-        # Spatial downscale for keyframe encoding
-        encode_height = height // spatial_downscale
-        encode_width = width // spatial_downscale
-        kf_latent_height = latent_height // spatial_downscale
-        kf_latent_width = latent_width // spatial_downscale
+        # Spatial downscale for keyframe encoding — snap to VAE spatial ratio
+        # so encoded dimensions are cleanly divisible by the VAE's internal layers
+        encode_height = (height // spatial_downscale // vae_spatial_ratio) * vae_spatial_ratio
+        encode_width = (width // spatial_downscale // vae_spatial_ratio) * vae_spatial_ratio
+        encode_height = max(encode_height, vae_spatial_ratio)
+        encode_width = max(encode_width, vae_spatial_ratio)
+        kf_latent_height = encode_height // vae_spatial_ratio
+        kf_latent_width = encode_width // vae_spatial_ratio
 
         # Convert to tensor: [1, C, F, H, W] float32 in [-1, 1]
         video_tensor = torch.from_numpy(video_clip).float() / 255.0
@@ -942,17 +960,22 @@ class LTX2ConditionEncodeNode(Node):
             vae_spatial_scale=vae_spatial_ratio,
             vae_temporal_scale=vae_temporal_ratio,
         )
-        # Scale spatial positions so they map to full-resolution pixel coords
+        # Scale positions so they map to full-resolution coords
         if spatial_downscale > 1:
             positions[:, 1, :] = positions[:, 1, :] * spatial_downscale
             positions[:, 2, :] = positions[:, 2, :] * spatial_downscale
+        # Temporal downsample: scale temporal positions so motion speed is preserved
+        # (each encoded frame actually represents `temporal_stride` original frames)
+        if temporal_stride > 1:
+            positions[:, 0, :] = positions[:, 0, :] * temporal_stride
 
         num_tokens = packed_tokens.shape[1]
 
         logger.info(
-            "Condition %d (keyframe video): %d pixel frames (stride=%d) → %d latent frames, %d tokens, strength=%.2f, spatial_ds=%d",
+            "Condition %d (keyframe video): %d pixel frames (speed=%d, stride=%d) → %d latent frames, %d tokens, strength=%.2f, spatial_ds=%d",
             condition_index,
             aligned_frames,
+            speed,
             temporal_stride,
             cond_latent_frames,
             num_tokens,

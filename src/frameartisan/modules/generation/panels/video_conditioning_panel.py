@@ -83,8 +83,29 @@ class VideoConditioningPanel(BasePanel):
         mode_layout.addWidget(self.mode_combo)
         main_layout.addLayout(mode_layout)
 
-        # Keyframe downscale options (visible only in keyframe mode)
+        # Keyframe options (visible only in keyframe mode)
         self._keyframe_options_frame = QVBoxLayout()
+
+        # Speed multiplier — skips frames to compress time (motion speeds up)
+        kf_speed_layout = QHBoxLayout()
+        self._kf_speed_label = QLabel("Speed:")
+        kf_speed_layout.addWidget(self._kf_speed_label)
+        self.keyframe_speed_combo = QComboBox()
+        for val, label in [(1, "1x"), (2, "2x"), (3, "3x"), (4, "4x")]:
+            self.keyframe_speed_combo.addItem(label, val)
+        cur_speed = int(getattr(self.gen_settings, "keyframe_speed", 1))
+        for i in range(self.keyframe_speed_combo.count()):
+            if self.keyframe_speed_combo.itemData(i) == cur_speed:
+                self.keyframe_speed_combo.setCurrentIndex(i)
+                break
+        self.keyframe_speed_combo.setToolTip(
+            "Speed up motion by skipping frames.\n"
+            "2x = every 2nd frame (motion plays twice as fast)."
+        )
+        self.keyframe_speed_combo.currentIndexChanged.connect(self._on_keyframe_speed_changed)
+        kf_speed_layout.addWidget(self.keyframe_speed_combo)
+        self._keyframe_options_frame.addLayout(kf_speed_layout)
+
         self._kf_downscale_label = QLabel("Keyframe Downsampling")
         self._kf_downscale_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._keyframe_options_frame.addWidget(self._kf_downscale_label)
@@ -224,6 +245,8 @@ class VideoConditioningPanel(BasePanel):
 
     def _update_keyframe_options_visibility(self) -> None:
         visible = self.mode_combo.currentData() == "keyframe"
+        self._kf_speed_label.setVisible(visible)
+        self.keyframe_speed_combo.setVisible(visible)
         self._kf_downscale_label.setVisible(visible)
         self.keyframe_spatial_combo.setVisible(visible)
         self.keyframe_temporal_combo.setVisible(visible)
@@ -233,6 +256,11 @@ class VideoConditioningPanel(BasePanel):
     def _on_mode_changed(self) -> None:
         self._update_keyframe_options_visibility()
         self._on_settings_changed()
+
+    def _on_keyframe_speed_changed(self) -> None:
+        speed = self.keyframe_speed_combo.currentData()
+        if speed is not None:
+            self.event_bus.publish("generation_change", {"attr": "keyframe_speed", "value": int(speed)})
 
     def _on_keyframe_ds_changed(self) -> None:
         spatial = self.keyframe_spatial_combo.currentData()
