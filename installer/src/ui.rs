@@ -126,6 +126,16 @@ impl InstallerApp {
                 ui.add_space(8.0);
                 ui.colored_label(egui::Color32::from_rgb(255, 100, 100), error);
                 ui.add_space(16.0);
+                let log_path = dirs::data_local_dir()
+                    .unwrap_or_default()
+                    .join("FrameArtisan")
+                    .join("installer.log");
+                ui.label("Full error details are in the log file:");
+                ui.add_space(4.0);
+                ui.code(log_path.to_string_lossy().to_string());
+                ui.add_space(4.0);
+                ui.label("Please include this file when reporting issues.");
+                ui.add_space(16.0);
                 if ui.button("Retry").clicked() {
                     self.screen = Screen::Setup;
                 }

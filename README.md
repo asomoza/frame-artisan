@@ -21,14 +21,14 @@ A desktop application for AI video generation using the LTX 2.0 and 2.3 video mo
 
 ## Installation
 
-See the [installer releases](https://github.com/TODO/frame-artisan/releases) for a one-click setup.
+See the [installer releases](https://github.com/asomoza/frame-artisan/releases) for a one-click setup.
 
 ### Manual installation
 
 You will need Python 3.12+ and [uv](https://docs.astral.sh/uv/) installed.
 
 ```bash
-git clone https://github.com/TODO/frame-artisan.git
+git clone https://github.com/asomoza/frame-artisan.git
 cd frame-artisan
 uv sync
 uv run frameartisan

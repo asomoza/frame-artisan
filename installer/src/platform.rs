@@ -28,7 +28,7 @@ pub fn torch_index_url(gpu: GpuType) -> &'static str {
 }
 
 /// PyTorch version to install.
-const TORCH_VERSION: &str = "2.7.1";
+const TORCH_VERSION: &str = "2.10.0";
 
 /// Returns the torch wheel URL for the given GPU type and current platform.
 /// The wheel filename encodes: torch-{version}+{variant}-cp{pyver}-cp{pyver}-{platform}.whl
@@ -56,13 +56,16 @@ pub fn torch_wheel_url(gpu: GpuType) -> String {
 /// Returns the platform wheel tag for the current OS/arch.
 fn platform_wheel_tag() -> &'static str {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    { "linux_x86_64" }
+    { "manylinux_2_28_x86_64" }
+
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    { "manylinux_2_28_aarch64" }
 
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    { "macosx_13_0_x86_64" }
+    { "macosx_14_0_x86_64" }
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    { "macosx_13_0_arm64" }
+    { "macosx_14_0_arm64" }
 
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     { "win_amd64" }
@@ -118,3 +121,9 @@ pub fn default_install_dir() -> PathBuf {
 
 /// Python version to install.
 pub const PYTHON_VERSION: &str = "3.12";
+
+/// Frame Artisan release tarball URL.
+pub fn app_release_url() -> String {
+    let version = "0.1.0";
+    format!("https://github.com/asomoza/frame-artisan/archive/refs/tags/v{version}.tar.gz")
+}

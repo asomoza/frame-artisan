@@ -38,15 +38,18 @@ pub async fn run_install(
     gpu: platform::GpuType,
     progress: SharedProgress,
 ) {
+    log::info!("Starting installation: dir={}, gpu={gpu}", install_dir.display());
     let result = run_install_inner(&install_dir, gpu, &progress).await;
     let mut p = progress.lock().await;
     match result {
         Ok(()) => {
+            log::info!("Installation complete: {}", install_dir.display());
             p.stage = "Installation complete!".into();
             p.detail = format!("Installed to {}", install_dir.display());
             p.finished = true;
         }
         Err(e) => {
+            log::error!("Installation failed: {e}");
             p.error = Some(e);
         }
     }
@@ -129,15 +132,23 @@ async fn run_install_inner(
     )
     .await?;
 
-    // Step 6: Install remaining dependencies
-    set_stage(progress, "Installing dependencies...", "this may take a minute").await;
+    // Step 6: Download and install Frame Artisan from release
+    let app_url = platform::app_release_url();
+    let app_tarball = install_dir.join("cache").join("frame-artisan.tar.gz");
+
+    if !app_tarball.exists() {
+        set_stage(progress, "Downloading Frame Artisan...", "").await;
+        download_with_progress(&app_url, &app_tarball, progress).await?;
+    }
+
+    set_stage(progress, "Installing Frame Artisan...", "this may take a minute").await;
     let torch_index = platform::torch_index_url(gpu);
     run_command(
         &uv_path,
         &[
             "pip",
             "install",
-            "FrameArtisan",
+            app_tarball.to_str().unwrap(),
             "--extra-index-url",
             torch_index,
             "--python",
@@ -155,6 +166,7 @@ async fn run_install_inner(
 }
 
 async fn set_stage(progress: &SharedProgress, stage: &str, detail: &str) {
+    log::info!("[STAGE] {stage} {detail}");
     let mut p = progress.lock().await;
     p.stage = stage.to_string();
     p.detail = detail.to_string();
@@ -180,23 +192,46 @@ async fn download_with_progress(
 }
 
 async fn run_command(program: &Path, args: &[&str], cwd: &Path) -> Result<(), String> {
+    let args_str = args.join(" ");
+    log::info!("Running: {} {args_str}", program.display());
     let output = Command::new(program)
         .args(args)
         .current_dir(cwd)
         .output()
         .await
-        .map_err(|e| format!("Failed to run {}: {e}", program.display()))?;
+        .map_err(|e| {
+            log::error!("Failed to run {}: {e}", program.display());
+            format!("Failed to launch command. Check the log file for details.")
+        })?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !stdout.is_empty() {
+        log::info!("stdout: {stdout}");
+    }
+    if !stderr.is_empty() {
+        log::info!("stderr: {stderr}");
+    }
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Log the full error for debugging
+        log::error!("Command failed: {} {args_str}", program.display());
+        log::error!("Exit code: {}", output.status);
+        log::error!("Full stderr:\n{stderr}");
+
+        // Return a short message for the UI — the log has the full details
+        let short_error = stderr
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .last()
+            .unwrap_or("Unknown error");
         return Err(format!(
-            "{} failed (exit {}):\n{}",
-            program.display(),
-            output.status,
-            stderr
+            "Step failed: {short_error}\n\nSee the log file for full details."
         ));
     }
 
+    log::info!("Command succeeded: exit {}", output.status);
     Ok(())
 }
 

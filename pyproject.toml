@@ -67,7 +67,7 @@ diffusers = { git = "https://github.com/huggingface/diffusers" }
 frameartisan = "frameartisan.__main__:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
