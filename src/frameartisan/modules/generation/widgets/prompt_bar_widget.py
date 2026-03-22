@@ -4,8 +4,6 @@ import random
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QCheckBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
-from transformers import GemmaTokenizer
-
 from frameartisan.app.event_bus import EventBus
 from frameartisan.buttons.generate_button import GenerateButton
 from frameartisan.modules.generation.widgets.prompt_input_widget import PromptInputWidget
@@ -27,7 +25,8 @@ class PromptBarWidget(QWidget):
         self.previous_seed = None
         self.use_random_seed = True
 
-        self.tokenizer = GemmaTokenizer.from_pretrained("./configs/GemmaTokenizer")
+        self._tokenizer = None
+        self._tokenizer_loaded = False
         self.max_tokens = 1024
 
         self.init_ui()
@@ -35,6 +34,68 @@ class PromptBarWidget(QWidget):
         self.event_bus.subscribe("json_graph", self.on_json_graph_event)
 
         self.set_button_generate()
+
+    @property
+    def tokenizer(self):
+        """Lazy-load the Gemma tokenizer from the component registry."""
+        if self._tokenizer_loaded:
+            return self._tokenizer
+
+        self._tokenizer_loaded = True
+
+        try:
+            from transformers import GemmaTokenizer
+        except ImportError:
+            return None
+
+        tokenizer_path = self._find_tokenizer_path()
+        if tokenizer_path is None:
+            return None
+
+        try:
+            self._tokenizer = GemmaTokenizer.from_pretrained(tokenizer_path)
+        except Exception:
+            pass
+
+        return self._tokenizer
+
+    def _find_tokenizer_path(self) -> str | None:
+        """Find a tokenizer path from the component registry, falling back to scanning model directories."""
+        import os
+
+        from frameartisan.app.app import get_app_database_path, get_app_directories
+
+        # Try component registry first
+        db_path = get_app_database_path()
+        if db_path:
+            try:
+                from frameartisan.utils.database import Database
+
+                db = Database(db_path)
+                row = db.fetch_one(
+                    "SELECT storage_path FROM component WHERE component_type = 'tokenizer' LIMIT 1"
+                )
+                db.disconnect()
+                if row and row[0] and os.path.isdir(row[0]):
+                    return row[0]
+            except Exception:
+                pass
+
+        # Fallback: scan models_diffusers for tokenizer subdirectories
+        dirs = get_app_directories()
+        if dirs is None:
+            return None
+
+        models_dir = str(dirs.models_diffusers)
+        if not os.path.isdir(models_dir):
+            return None
+
+        for name in os.listdir(models_dir):
+            tokenizer_path = os.path.join(models_dir, name, "tokenizer")
+            if os.path.isdir(tokenizer_path) and os.path.isfile(os.path.join(tokenizer_path, "tokenizer.json")):
+                return tokenizer_path
+
+        return None
 
     def init_ui(self) -> None:
         main_layout = QHBoxLayout()
@@ -112,8 +173,11 @@ class PromptBarWidget(QWidget):
         prompt = self.sender()
         text = prompt.toPlainText()
 
-        tokens = self.tokenizer(text).input_ids[1:-1]
-        num_tokens = len(tokens)
+        if self.tokenizer is not None:
+            tokens = self.tokenizer(text).input_ids[1:-1]
+            num_tokens = len(tokens)
+        else:
+            num_tokens = 0
 
         prompt.update_token_count(num_tokens)
 
