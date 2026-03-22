@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2 — 2026-03-22
+
+- Lazy-load tokenizer from component registry for prompt token counting (removes bundled 32MB config)
+- Include theme assets (icons, images, stylesheet) in package
+- Installer: add `--index-strategy unsafe-best-match` to fix setuptools resolution from PyTorch index
+- Installer: shorter error messages with log file reference
+
 ## 0.1.1 — 2026-03-22
 
 - Fix `setuptools>=77` build requirement for PEP 639 license field
