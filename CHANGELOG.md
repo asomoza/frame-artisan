@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1 — 2026-03-22
+
+- Fix `setuptools>=77` build requirement for PEP 639 license field
+- Fix Python version requirement: `>=3.12` (was `>=3.13`)
+
 ## 0.1.0 — 2026-03-22
 
 Initial release.
