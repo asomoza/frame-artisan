@@ -1,0 +1,23 @@
+[package]
+name = "frame-artisan-installer"
+version = "0.1.0"
+edition = "2024"
+description = "Installer for Frame Artisan"
+
+[dependencies]
+eframe = "0.31"
+egui = "0.31"
+reqwest = { version = "0.12", features = ["stream"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util"] }
+futures-util = "0.3"
+dirs = "6"
+zip = "2"
+flate2 = "1"
+tar = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
