@@ -15,7 +15,7 @@ pip_cache/
 python/
 python_packages/
 installer/resources/
-installer/
+installer/target/
 wheels/
 wheel/
 tmp/

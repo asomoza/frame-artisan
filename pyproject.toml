@@ -1,9 +1,11 @@
 [project]
 name = "FrameArtisan"
 version = "0.1.0"
-description = "Add your description here"
+description = "A desktop application for AI video generation using the LTX 2.0 and 2.3 video models"
+license = "Apache-2.0"
+authors = [{ name = "Alvaro Somoza" }]
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "av>=14.0.0",
     "attrs>=25.4.0",
