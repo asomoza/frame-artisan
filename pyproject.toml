@@ -69,7 +69,7 @@ frameartisan = "frameartisan.__main__:main"
 [tool.setuptools.package-data]
 "frameartisan.theme" = ["*.qss"]
 "frameartisan.theme.icons" = ["*.png"]
-"frameartisan.theme.images" = ["*.webp"]
+"frameartisan.theme.images" = ["*.webp", "*.png"]
 
 [build-system]
 requires = ["setuptools>=77"]

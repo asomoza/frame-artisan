@@ -36,10 +36,12 @@ pub type SharedProgress = Arc<Mutex<InstallProgress>>;
 pub async fn run_install(
     install_dir: PathBuf,
     gpu: platform::GpuType,
+    add_menu: bool,
+    add_desktop: bool,
     progress: SharedProgress,
 ) {
-    log::info!("Starting installation: dir={}, gpu={gpu}", install_dir.display());
-    let result = run_install_inner(&install_dir, gpu, &progress).await;
+    log::info!("Starting installation: dir={}, gpu={gpu}, menu={add_menu}, desktop={add_desktop}", install_dir.display());
+    let result = run_install_inner(&install_dir, gpu, add_menu, add_desktop, &progress).await;
     let mut p = progress.lock().await;
     match result {
         Ok(()) => {
@@ -58,6 +60,8 @@ pub async fn run_install(
 async fn run_install_inner(
     install_dir: &Path,
     gpu: platform::GpuType,
+    add_menu: bool,
+    add_desktop: bool,
     progress: &SharedProgress,
 ) -> Result<(), String> {
     tokio::fs::create_dir_all(install_dir)
@@ -163,6 +167,10 @@ async fn run_install_inner(
     // Step 7: Create launcher script
     set_stage(progress, "Creating launcher...", "").await;
     create_launcher(install_dir, &venv_path).await?;
+
+    // Step 8: Create shortcuts
+    set_stage(progress, "Creating shortcuts...", "").await;
+    create_shortcuts(install_dir, add_menu, add_desktop).await?;
 
     Ok(())
 }
@@ -350,6 +358,106 @@ async fn create_launcher(install_dir: &Path, venv_path: &Path) -> Result<(), Str
     }
 
     Ok(())
+}
+
+async fn create_shortcuts(install_dir: &Path, add_menu: bool, add_desktop: bool) -> Result<(), String> {
+    if !add_menu && !add_desktop {
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let launcher_path = install_dir.join("frameartisan");
+        let icon_path = install_dir.join("icon.png");
+
+        // Find the icon in the installed package and copy to install dir for stable reference
+        let icon_src = find_installed_icon(install_dir).await;
+        if let Some(src) = &icon_src {
+            tokio::fs::copy(src, &icon_path).await.ok();
+        }
+
+        let icon_str = if icon_path.exists() {
+            icon_path.to_string_lossy().to_string()
+        } else {
+            "application-x-executable".to_string()
+        };
+
+        let desktop_entry = format!(
+            "[Desktop Entry]\n\
+             Type=Application\n\
+             Name=Frame Artisan\n\
+             Comment=AI Video Generation\n\
+             Exec={}\n\
+             Icon={icon_str}\n\
+             Terminal=false\n\
+             Categories=Graphics;Video;AudioVideo;\n",
+            launcher_path.display(),
+        );
+
+        if add_menu {
+            let apps_dir = dirs::data_dir()
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .join("applications");
+            tokio::fs::create_dir_all(&apps_dir).await.ok();
+            let desktop_file = apps_dir.join("frame-artisan.desktop");
+            tokio::fs::write(&desktop_file, &desktop_entry)
+                .await
+                .map_err(|e| format!("Write .desktop file: {e}"))?;
+            log::info!("Created menu entry: {}", desktop_file.display());
+        }
+
+        if add_desktop {
+            if let Some(desktop_dir) = dirs::desktop_dir() {
+                let desktop_file = desktop_dir.join("frame-artisan.desktop");
+                tokio::fs::write(&desktop_file, &desktop_entry)
+                    .await
+                    .map_err(|e| format!("Write desktop shortcut: {e}"))?;
+
+                // Make desktop shortcut executable (required by some DEs)
+                let df = desktop_file.clone();
+                tokio::task::spawn_blocking(move || {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&df, std::fs::Permissions::from_mode(0o755)).ok();
+                })
+                .await
+                .ok();
+
+                log::info!("Created desktop shortcut: {}", desktop_file.display());
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // TODO: create .lnk shortcuts via PowerShell
+        log::info!("Windows shortcuts not yet implemented");
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // TODO: create .app bundle or alias
+        log::info!("macOS shortcuts not yet implemented");
+    }
+
+    Ok(())
+}
+
+/// Find the icon.png inside the installed frameartisan package.
+async fn find_installed_icon(install_dir: &Path) -> Option<PathBuf> {
+    let lib_dir = install_dir.join(".venv/lib");
+    let Ok(mut entries) = tokio::fs::read_dir(&lib_dir).await else {
+        return None;
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let icon = entry
+            .path()
+            .join("site-packages/frameartisan/theme/images/icon.png");
+        if icon.exists() {
+            return Some(icon);
+        }
+    }
+    None
 }
 
 /// Simple URL decode for %XX sequences.

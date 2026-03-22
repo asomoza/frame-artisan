@@ -14,6 +14,9 @@ pub struct InstallerApp {
     gpu: GpuType,
     /// Installation directory
     install_dir: String,
+    /// Shortcut options
+    add_menu: bool,
+    add_desktop: bool,
     /// Shared progress state (accessed by both UI and async task)
     progress: SharedProgress,
     /// Tokio runtime for async operations
@@ -33,6 +36,8 @@ impl InstallerApp {
             screen: Screen::Setup,
             gpu: GpuType::NvidiaCuda,
             install_dir: default_dir.to_string_lossy().into_owned(),
+            add_menu: true,
+            add_desktop: false,
             progress: Arc::new(Mutex::new(InstallProgress::default())),
             runtime: tokio::runtime::Runtime::new().expect("Failed to create tokio runtime"),
         }
@@ -54,6 +59,11 @@ impl InstallerApp {
             ui.add_space(12.0);
             ui.label("Install location:");
             ui.text_edit_singleline(&mut self.install_dir);
+
+            ui.add_space(12.0);
+            ui.label("Shortcuts:");
+            ui.checkbox(&mut self.add_menu, "Add to application menu");
+            ui.checkbox(&mut self.add_desktop, "Add desktop shortcut");
 
             ui.add_space(24.0);
 
@@ -176,8 +186,10 @@ impl InstallerApp {
         });
 
         // Spawn the install task on the tokio runtime
+        let add_menu = self.add_menu;
+        let add_desktop = self.add_desktop;
         self.runtime.spawn(async move {
-            install_steps::run_install(install_dir, gpu, progress).await;
+            install_steps::run_install(install_dir, gpu, add_menu, add_desktop, progress).await;
         });
     }
 }

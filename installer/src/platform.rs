@@ -124,6 +124,6 @@ pub const PYTHON_VERSION: &str = "3.12";
 
 /// Frame Artisan release tarball URL.
 pub fn app_release_url() -> String {
-    let version = "0.1.1";
+    let version = "0.1.2";
     format!("https://github.com/asomoza/frame-artisan/archive/refs/tags/v{version}.tar.gz")
 }

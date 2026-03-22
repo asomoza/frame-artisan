@@ -7,7 +7,7 @@ import tempfile
 from importlib.resources import files
 
 from PyQt6.QtCore import QSettings, Qt
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import QApplication, QSplashScreen
 
 from frameartisan.app.directories import DirectoriesObject
@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 class FrameArtisanApplication(QApplication):
     SPLASH_IMG = str(files("frameartisan.theme.images").joinpath("splash.webp"))
+    APP_ICON = str(files("frameartisan.theme.images").joinpath("icon.png"))
 
     def __init__(self, *args, **kwargs):
         myappid = "zcode.frameartisan.010"
@@ -29,6 +30,8 @@ class FrameArtisanApplication(QApplication):
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
         super().__init__(*args, **kwargs)
+
+        self.setWindowIcon(QIcon(self.APP_ICON))
 
         style_data = files("frameartisan.theme").joinpath("stylesheet.qss").read_bytes()
         stylesheet = style_data.decode("utf-8")
